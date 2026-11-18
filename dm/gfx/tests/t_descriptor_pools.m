@@ -1,7 +1,9 @@
 // A recorded descriptor index is resolved against the execution pool, including an inherited pool and a pool changed after a bind. Synthetic NVN commands and 3D images only.
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

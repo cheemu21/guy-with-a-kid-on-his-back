@@ -33,6 +33,15 @@ app_pool	0x240000000
 # the NPDM declares 20 MB of system resource
 sys_resource	0x1400000
 
+
+# ---- Frame rate ----
+# The launcher's Frame rate row (dm/games/settings.tsv DM_FPS_TARGET): 60 by default, the player may choose 30. This main has no frame step stub and RE Engine's frame
+# limit is not one the host writes, so the 30 comes from the display link (hle_nvn.c nvn_link_fps_cap), which needs fps_link_cap: the link runs at 30 Hz, the game's own
+# present interval stays, and RE Engine steps by the time that passed, so 30 fps is 30 frames with 33.3 ms steps. Measured on an iPhone 18 Pro: 60.0 fps at the default,
+# the device holding it for minutes; 30 checked there too (the row's 30: steady 30, the game's speed unchanged)
+fps_target	60
+fps_link_cap	on
+
 # ---- Shader split ----
 # RE Engine: the shaders are SDF definitions inside the KPKA PAKs (shader_split.py kpka_jobs / sdf_shaders), as in Monster Hunter Rise's and PRAGMATA's profiles
 shader_groups	re_chunk=sdf
@@ -45,3 +54,8 @@ shader_note	PRAGMATA shaders
 depth_mode	zero
 
 # address regions: 2026-11-10, in its first 15 s in nnMain the game's regions reach alias +38.41 GB, past the profile's 4.38 GB alias region, the iPhone layout: the request returning to main+0x12de5a4 takes 32.00 GB: a smaller one works only if its allocator places nothing by fixed offsets; the request returning to main+0x14cda60 takes 6.27 GB: a smaller one works only if its allocator places nothing by fixed offsets (docs/reference/memory.md, Virtual address memory and the alias region) (rewrite 6d87e4dc95ee)
+
+# ---- Touch controls ----
+# The Orbit layout (DmGamepad.m touch_style orbit): built around the game's controls (aim ZL, shoot ZR, hacking = ZL + face keys as cursor keys, Overdrive LS + RS, weapons on the D-pad)
+pad_layout	full
+touch_style	orbit

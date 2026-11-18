@@ -1,8 +1,10 @@
 // Tiled resolves must produce pixels, including the layers selected when recorded.
 // Distinct sample colours distinguish a multisample average from a sample-zero copy.
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

@@ -2,8 +2,10 @@
 // ID views, the pool tables and the handle tables at the next submission, and the GPU reads the newly mapped page; a request outside the texture notes nothing; serial changes
 // while a sparse pool exists keep the pool tables. Physical page contents are literal colours. After the fixture of PR #1721 (NicholasDominici)
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

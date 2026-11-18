@@ -5,8 +5,10 @@
 // (it did in 3 of 60 runs); the predicates, which the host's encode-time values decide, are checked.
 #include "game_profile.h"
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

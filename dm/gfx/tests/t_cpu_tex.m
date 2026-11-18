@@ -2,8 +2,10 @@
 // not in it staying cheap with thousands of consecutive serials in it (a CFSet that hashed serials as numbers probed a whole bucket run per miss: half of Batman: Arkham Knight's
 // rendering thread with 6,442 CPU-written textures)
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

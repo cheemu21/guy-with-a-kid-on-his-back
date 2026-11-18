@@ -4,8 +4,10 @@
 // streams the finer levels of its sparse ASTC textures in by buffer-to-texture copies, and every upload after a mapping change put back zeros (GitHub #2350). A gather alone leaves the physical pool it reads out of the residency set (gather_only). Run twice: with the GPU
 // deswizzle (the gather on the GPU) and without it (the gather on the CPU). Texel values are literal colours
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

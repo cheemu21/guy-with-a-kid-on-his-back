@@ -2,8 +2,10 @@
 // stand-in of its smallest levels, gathered through the pool's page table (stand_fill), not the dummy. One whose small levels are not mapped yet holds the dummy and waits, with no
 // look at it from walks, for a mapping over its pages, which makes its stand-in (PRAGMATA maps a streamed texture's small levels after registering it)
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

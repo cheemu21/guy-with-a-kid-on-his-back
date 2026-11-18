@@ -11,6 +11,8 @@ targets:
   DmIOS:
     type: application
     platform: iOS
+    dependencies:
+      - sdk: AVFAudio.framework  # AVAudioSession is used by front_ios and phone haptics, not the Mac host.
     sources:
       - path: Sources
         excludes: [Info.plist]  # generated per project under Gen/, so games never share the generated plist

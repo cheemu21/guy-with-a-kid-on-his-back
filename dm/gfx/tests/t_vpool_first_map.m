@@ -2,8 +2,10 @@
 // Once a texture, buffer, event or address was made on it, the pool stays sparse and those addresses read the physical pages (issue #2513). Sampler IDs past the sampler pool are empty slots.
 // Based on PR #2519's t_vpool_alias.
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

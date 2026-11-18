@@ -6,8 +6,10 @@
 // Cases: an address inside an ordinary pool (words before it readable too, nothing past the pool), PRAGMATA's hangar binding (a 1 MB sparse pool with one 0x30000-byte run mapped at its
 // base, read 0x50000 bytes: the run, then zeros where its GI voxeliser ef4ad01151918469 read other memory), and a dummy binding (nothing readable). Runs under Metal validation
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

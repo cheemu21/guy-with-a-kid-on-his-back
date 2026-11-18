@@ -2465,11 +2465,25 @@ static int fps_present_cap(void) {
         if (g_present_cap && !dm_fps_lock_engine() && display_mode())
             LOG("[nvn] present cap %d fps (%s) applied by the present interval alone: display mode, and this main has no engine frame limit the host writes", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target");
         else if (g_present_cap && !dm_fps_lock_engine()) {
-            LOG("[nvn] present cap %d fps (%s) not applied: this main has neither a frame step nor an engine frame limit the host writes, so the game's own present interval stays", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target");
+            LOG("[nvn] present cap %d fps (%s) not the present interval: this main has neither a frame step nor an engine frame limit the host writes, so the game's own present interval stays%s", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target",
+                g_present_cap == 30 ? "; the display link runs at 30 Hz instead (nvn_link_fps_cap)" : "");
             g_present_cap=0;
         }
     }
     return g_present_cap;
+}
+// The player's Frame rate (DM_FPS_TARGET, the launcher's Frame rate row) as the display link's rate, for a profile that opts in (fps_link_cap, DM_GAME_FPS_LINK_CAP) and a main the
+// host cannot make step at that rate: no frame step stub (dm_fps_state) and no engine frame limit the host writes (dm_fps_lock_engine), in game mode (display mode applies the cap
+// as the present interval alone, fps_present_cap). The link then runs at 30 Hz (nvn_mtl.m mtl_fps_target reads this, link_sync follows) while the game's own present interval stays
+// as it sets it, so a game that steps by the time that really passed runs at 30 fps with 33.3 ms steps: PRAGMATA, 60.0 fps at the default 60, 30 with the row at 30. The profile
+// key exists because a game that steps by a fixed 1/60 s would run at half speed instead; 60 does nothing here
+int nvn_link_fps_cap(void) {
+    if (!DM_GAME_FPS_LINK_CAP || dm_fps_state || display_mode() || dm_fps_lock_engine()) return 0;
+    const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
+    if (t != 30) return 0;
+    static int logged;
+    if (!logged++) LOG("[nvn] frame rate capped at 30 fps (%s) by the display link: this main has neither a frame step nor an engine frame limit the host writes, and the profile says it steps by the time that passed (fps_link_cap), so its own present interval stays", e ? "DM_FPS_TARGET" : "game profile fps_target");
+    return 30;
 }
 static nvn_fstep g_fs;   // present thread only
 static nvn_fgpu g_fg;   // the GPU time at kmin and at the current hold (nvn_fstep_gpu_slowed)
@@ -2960,19 +2974,20 @@ static void vpool_release(pool_t *o) { if (o->vp && o->vp->nrun) mtl_finish(); p
 static void vrun_set(struct vpool *v, uint64_t lo, uint64_t hi, int mapped) {
     struct vrun *nl = malloc(((size_t)v->nrun + 2) * sizeof *nl); int nn = 0, nd = 0, na = 0; uint64_t mlo = lo, mhi = hi;
     const void **del = malloc(((size_t)v->nrun + 1) * sizeof *del), *add[2]; uint64_t asz[2];
-    if (!nl || !del) die("sparse pool run list allocation failed");
+    unsigned char *keep = malloc((size_t)v->nrun + 1);   // a run the mapping joins from beside it, not over it: its pages did not change, so its buffers stay valid (nvn_mtl.m big_carry)
+    if (!nl || !del || !keep) die("sparse pool run list allocation failed");
     for (int k = 0; k < v->nrun; k++) {
         uint64_t a = v->run[k].lo, b = v->run[k].hi;
         if (b < lo || a > hi || (!mapped && (b == lo || a == hi))) { nl[nn++] = (struct vrun){a, b}; continue; }   // untouched (an unmap leaves adjacent runs alone)
-        del[nd++] = v->base + a;
+        keep[nd] = mapped && (b == lo || a == hi); del[nd++] = v->base + a;
         if (mapped) { if (a < mlo) mlo = a; if (b > mhi) mhi = b; continue; }   // joins the new run
         // what the unmap leaves on either side: only the first run it touches starts before it and only the last ends after it, so two pieces at most
         if (a < lo) { nl[nn++] = (struct vrun){a, lo}; add[na] = v->base + a; asz[na++] = lo - a; }   // NOLINT(clang-analyzer-security.ArrayBound): two pieces at most (above), which the analyzer cannot derive from the sorted, disjoint runs
         if (b > hi) { nl[nn++] = (struct vrun){hi, b}; add[na] = v->base + hi; asz[na++] = b - hi; }   // NOLINT(clang-analyzer-security.ArrayBound): two pieces at most (above), which the analyzer cannot derive from the sorted, disjoint runs
     }
     if (mapped) { nl[nn++] = (struct vrun){mlo, mhi}; add[na] = v->base + mlo; asz[na++] = mhi - mlo; }
-    if (nd || na) mtl_pool_replace(del, nd, add, asz, na);
-    free(del);
+    if (nd || na) mtl_pool_replace(del, nd, add, asz, na, keep);
+    free(del); free(keep);
     for (int a = 1; a < nn; a++) for (int b = a; b > 0 && nl[b].lo < nl[b - 1].lo; b--) { struct vrun t = nl[b]; nl[b] = nl[b - 1]; nl[b - 1] = t; }
     if (nn > v->nrun && nn >= 1024 && !(nn & (nn - 1))) LOG("[nvn] virtual pool %p: %d separate mapped runs", (const void *)v->pool, nn);
     free(v->run); v->run = nl; v->nrun = nn;

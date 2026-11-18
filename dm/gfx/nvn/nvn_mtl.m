@@ -40,6 +40,7 @@
 #include "nvn_link_latch.h"
 #include "nvn_timestamp.h"
 #include "msl_image.h"
+#include "msl_imgz.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
@@ -766,8 +767,9 @@ void bf_want_note(const char *key) { want_note(&g_bf_want, key); }
 
 // ---------- Memory pools ----------
 // How far a pool entry's buffer reaches (BIG_MIN): REACH_WHOLE a large pool's whole-pool buffer; REACH_END to its pool's end (an ordinary pool, or a chunk that reaches the end); REACH_SHORT a chunk
-// that ends before its pool does, which answers only lookups that say how far they read
-enum { REACH_WHOLE, REACH_END, REACH_SHORT };
+// that ends before its pool does, which answers only lookups that say how far they read; REACH_PART a large pool's part for raw global memory's pool table alone (big_cover): a
+// buffer kept from a pool it grew out of (big_carry), or one over the rest of it. No lookup gets a part: big_lookup answers by chunk[] and full only
+enum { REACH_WHOLE, REACH_END, REACH_SHORT, REACH_PART };
 typedef struct { uintptr_t lo, hi; uintptr_t base; __unsafe_unretained id<MTLBuffer> buf; uint64_t gpu; const void *key; int res; uint64_t born; uintptr_t end; int reach; uint32_t n_tex_reads, n_other; } pool_ent;   // res: already in the residency set (on demand, see pool_res); born: when it was added (ns); end: where the buffer ends, reach: how far that is (a large pool's chunk, see BIG_MIN); n_tex_reads / n_other: lookups by texture uploads / by anything else (mem_census)
 static pool_ent *g_pools; static int g_npool, g_cap;
 static int g_pidx_ok, g_plast = -1;   // whether the address→pool index is valid, the last hit (pool_find)
@@ -898,7 +900,10 @@ static void mtl_init_once(void) {
     g_nvn_deswz_gpu = nvn_deswz_gpu_init(g_dev) == 0;
     dm_res_report_register(mtl_res_counts);
     if (!g_nvn_deswz_gpu) MLOG("[RED] GPU deswizzle init failed; swizzled textures fall back to the CPU");
-    MLOG("Metal device %s", g_dev.name.UTF8String);
+    // The architecture is what build_ipa_from_nsp.py --gpu takes to bundle a pipeline archive; the working set and physical memory size the GPU memory budget per device (iPhone 15 Pro: 8 GB)
+    MLOG("Metal device %s, architecture %s, recommended working set %llu MB, physical memory %llu MB", g_dev.name.UTF8String,
+         [(id)g_dev respondsToSelector:@selector(architecture)] ? g_dev.architecture.name.UTF8String : "unknown",
+         (unsigned long long)(g_dev.recommendedMaxWorkingSetSize >> 20), (unsigned long long)(NSProcessInfo.processInfo.physicalMemory >> 20));
     udc_selftest();
 }
 
@@ -1015,6 +1020,7 @@ static void pool_res(int i) {
 enum { BIG_MIN = 512u << 20, BIG_S = 16u << 20, BIG_MAX = 32 };
 typedef struct { uintptr_t lo, hi, a, b; const void *mem; int *chunk, full; NSMutableArray *old; } big_pool;   // chunk: stride → g_pools index + 1; full: the whole pool's entry + 1; old: buffers a longer chunk replaced, alive with the pool
 static big_pool g_big[BIG_MAX]; static int g_nbig;
+static uint64_t g_big_carried, g_big_parts, g_big_part_mb, g_big_merged;   // under g_mu: pools whose buffers went over to a large pool (big_carry); parts made for the pool table and their MB; times its parts gave way to one whole buffer (big_cover)
 static id<MTLBuffer> pool_buf(uintptr_t a, uintptr_t b);   // a pool's zero-copy buffer over [a, b), made over writable pages (below)
 static int big_of(uint64_t addr) { for (int i = 0; i < g_nbig; i++) if (addr >= g_big[i].lo && addr < g_big[i].hi) return i; return -1; }
 // A pool to put into the table: its zero-copy buffer is made first, outside g_mu (pool_new_prep; it may retry for seconds), and the entry goes in under g_mu (pool_new_put), so a change
@@ -1071,6 +1077,7 @@ void mtl_pool_add(const void *mem, uint64_t size) {
 
 static void big_moved(int i) {   // caller holds g_mu: entry i has a new index
     const pool_ent *e = &g_pools[i];
+    if (e->reach == REACH_PART) return;   // no index of a part is kept (big_cover finds them by key)
     for (int k = 0; k < g_nbig; k++) { big_pool *b = &g_big[k]; if (b->mem != e->key) continue;
         if (e->reach == REACH_WHOLE) b->full = i + 1; else b->chunk[(e->lo - b->a) >> 24] = i + 1;
         return; }
@@ -1119,21 +1126,56 @@ void mtl_pool_del(const void *mem) {
 // whenever a mapping joins it to its neighbours or an unmap splits it (hle_nvn.c vrun_set), on the game's thread while the replay looks addresses up on its own. Removed and then
 // added, an address mapped all along was in no pool between the two: PRAGMATA's mesh shaders 765e6d9d2588ce70 and 5aab38bb5ba67ef7 read a buffer whose address the game pushes,
 // 0x3000000 into a sparse pool whose one run kept growing (0x8c5e304000..0x8c7b1a4000, then on), and got a dummy buffer at frames 2971 and 4484, the frames the run was replaced in
-void mtl_pool_replace(const void *const *del, int ndel, const void *const *add, const uint64_t *size, int nadd) {
+// A replaced pool marked keep lies inside a new large pool over pages that did not change (a run beside the mapping that joined it, hle_nvn.c vrun_set): its buffers hold the pages they
+// were made over, which are the new pool's there, so they go over to it (big_carry) instead of being released, and raw global memory's pool table goes on naming them (big_cover).
+// Before, every join gave the new run one buffer of the whole run, which Metal wires whole, while the replaced runs stayed wired until their work completed: PRAGMATA maps its sparse
+// pools a few MB at a time beside a run of 500-940 MB, 266 such buffers (7.5 GB) went into the residency set in 300 frames, four of 730-742 MB over the same pages were alive
+// at once, and command buffers failed with the GPU out of memory at 8.3 GB of an iPhone 18 Pro's 8 GB working set; the rewiring stalled frames for seconds and made a movie play slow.
+// Caller holds g_mu. → 1 when the buffers went over
+static int big_carry(const void *from, const pool_new *to) {
+    if (to->buf) return 0;   // an ordinary pool has one buffer of its own
+    int t = -1, f = -1; for (int k = 0; k < g_nbig; k++) { if (g_big[k].mem == to->mem) t = k; if (g_big[k].mem == from) f = k; }
+    uintptr_t lo = 0, hi = 0;
+    if (f >= 0) { lo = g_big[f].a; hi = g_big[f].b; }
+    else for (int i = 0; i < g_npool; i++) if (g_pools[i].key == from) { lo = g_pools[i].base; hi = g_pools[i].end; break; }
+    if (t < 0 || hi <= lo || lo < g_big[t].a || hi > g_big[t].b) return 0;
+    big_pool *b = &g_big[t]; int same = f >= 0 && g_big[f].a == b->a;   // chunks of the same start keep their strides
+    for (int i = 0; i < g_npool; i++) { pool_ent *e = &g_pools[i]; if (e->key != from) continue;
+        e->key = to->mem;
+        if (same && (e->reach == REACH_END || e->reach == REACH_SHORT) && !b->chunk[(e->lo - b->a) >> 24]) { b->chunk[(e->lo - b->a) >> 24] = i + 1; if (e->end < b->b) e->reach = REACH_SHORT; }
+        else e->reach = REACH_PART;   // the old pool's whole buffer, an ordinary pool's buffer, or a part it had
+    }
+    if (f >= 0) { [b->old addObjectsFromArray:g_big[f].old]; free(g_big[f].chunk); g_big[f] = g_big[--g_nbig]; atomic_fetch_sub(&g_big_n, 1); }   // b is not used after the move
+    g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); g_big_carried++;
+    return 1;
+}
+static int pool_carry(const void *from, const pool_new *n, int nn) {   // caller holds g_mu: into the new pool that holds it, if one does
+    for (int j = 0; j < nn; j++) if (big_carry(from, &n[j])) return 1;
+    return 0;
+}
+void mtl_pool_replace(const void *const *del, int ndel, const void *const *add, const uint64_t *size, int nadd, const unsigned char *keep) {
     mtl_init();
     pool_new *n = nadd ? (pool_new *)calloc((size_t)nadd, sizeof *n) : NULL; if (nadd && !n) MDIE("pool replacement");
     for (int i = 0; i < nadd; i++) pool_new_prep(&n[i], add[i], size[i]);
     reg_bump(-1, REG_POOL);
+    char *tag;
     @autoreleasepool {
     NSMutableArray<id<MTLBuffer>> *gone = [NSMutableArray array];
+    // A kept pool goes under a key of its own first: a run that grows at its end starts where the new one does, and entries are keyed by that address
+    tag = ndel ? (char *)malloc((size_t)ndel) : NULL; if (ndel && !tag) MDIE("pool replacement");
     pthread_mutex_lock(&g_mu);
-    for (int i = 0; i < ndel; i++) pool_take_out(del[i], gone);
+    for (int i = 0; i < ndel; i++) {
+        if (!keep || !keep[i]) { pool_take_out(del[i], gone); continue; }   // first, so their large-pool slots are free for the new ones
+        for (int k = 0; k < g_npool; k++) if (g_pools[k].key == del[i]) g_pools[k].key = tag + i;
+        for (int k = 0; k < g_nbig; k++) if (g_big[k].mem == del[i]) g_big[k].mem = tag + i;
+    }
     for (int i = 0; i < nadd; i++) pool_new_put(&n[i]);
+    for (int i = 0; i < ndel; i++) if (keep && keep[i] && !pool_carry(tag + i, n, nadd)) pool_take_out(tag + i, gone);
     pool_gone_release(gone);
     pthread_mutex_unlock(&g_mu);
     }
     for (int i = 0; i < nadd; i++) n[i].buf = nil;   // release the references before the memory goes (a strong member of a calloc'd array)
-    free(n);
+    free(n); free(tag);   // no entry is keyed by a tag any more: each went over or was taken out
     reg_bump(-1, REG_POOL);
 }
 
@@ -1166,6 +1208,49 @@ static int big_full(big_pool *b, const char *why) {
         for (id<MTLBuffer> o in b->old) { c++; mb += o.length; }
         MLOG("memory pool %p+%llu MB: one buffer of the whole pool (%s); the chunks made before it stay: %d, %llu MB", b->mem, (unsigned long long)((b->hi - b->lo) >> 20), why, c, (unsigned long long)(mb >> 20)); }
     return n;
+}
+static void pool_drop_entry(int i, NSMutableArray<id<MTLBuffer>> *gone) {   // caller holds g_mu: entry i out of the table, its buffer to deferred release (pool_gone_release)
+    id<MTLBuffer> buf = g_pools[i].buf; [g_keep removeObject:buf]; [gone addObject:buf]; if (g_pools[i].res) g_pool_res_n--;
+    g_pools[i] = g_pools[--g_npool]; g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);
+    if (i < g_npool) big_moved(i);
+}
+// Raw global memory's pool table reaches all of a large pool: the shader walks the table by itself, so it may read any address of the pool. The table's entries need not be one buffer,
+// as each names the buffer of its own range: so it takes the pool's chunks and the buffers it kept from the pools it grew out of (big_carry) as far as they reach from its start without a
+// gap, and one new buffer over the rest (a part, REACH_PART), wired for the few MB a mapping added rather than for the whole pool again (mtl_pool_replace says why). A pool that grew
+// out of none, has nothing at its start or has BIG_PARTS parts gets one buffer of the whole pool (big_full), as before: a part beside chunks of a pool that never grew would be wired a
+// second time by the whole buffer of the first lookup of unknown length. Once the pool has a whole buffer (made here or by such a lookup), its parts go after the work that may use
+// them. Caller holds g_mu; *gone made on demand
+enum { BIG_PARTS = 64 };
+typedef struct { uintptr_t lo, hi; } big_span;
+static int big_span_cmp(const void *x, const void *y) { uintptr_t a = ((const big_span *)x)->lo, b = ((const big_span *)y)->lo; return a < b ? -1 : a > b; }
+static void big_drop_parts(big_pool *b, NSMutableArray<id<MTLBuffer>> *__strong *gone) {   // caller holds g_mu
+    if (!*gone) *gone = [NSMutableArray array];
+    for (int i = 0; i < g_npool; i++) if (g_pools[i].key == b->mem && g_pools[i].reach == REACH_PART) { pool_drop_entry(i, *gone); i--; }
+}
+static void big_cover(int k, NSMutableArray<id<MTLBuffer>> *__strong *gone) {
+    big_pool *b = &g_big[k];
+    int n = 0, parts = 0; for (int i = 0; i < g_npool; i++) if (g_pools[i].key == b->mem) { n++; parts += g_pools[i].reach == REACH_PART; }
+    if (b->full) { if (parts) big_drop_parts(b, gone); return; }
+    if (!parts) { big_full(b, "raw global memory's pool table"); return; }
+    uintptr_t cov = b->lo;
+    if (n) {
+        big_span *s = malloc((size_t)n * sizeof *s); if (!s) MDIE("the pool table's cover");
+        int m = 0; for (int i = 0; i < g_npool; i++) if (g_pools[i].key == b->mem) s[m++] = (big_span){g_pools[i].lo, g_pools[i].hi};
+        qsort(s, (size_t)m, sizeof *s, big_span_cmp);
+        for (int i = 0; i < m && s[i].lo <= cov; i++) if (s[i].hi > cov) cov = s[i].hi;
+        free(s);
+    }
+    if (cov >= b->hi) return;
+    if (cov == b->lo || parts >= BIG_PARTS) {
+        if (big_full(b, "raw global memory's pool table") < 0) return;
+        big_drop_parts(b, gone); g_big_merged++;
+        return;
+    }
+    uintptr_t pg = (uintptr_t)getpagesize(), x = cov & ~(pg - 1); if (x < b->a) x = b->a;
+    if (big_new(b, x, b->b, b->b, REACH_PART) < 0) return;
+    g_big_parts++; g_big_part_mb += (b->b - x) >> 20;
+    static int nl; if (nl++ < 16) MLOG("memory pool %p+%llu MB: raw global memory's pool table reaches its first %llu MB through buffers it already had, and %llu MB through a new part (%d parts before it)",
+                                     b->mem, (unsigned long long)((b->hi - b->lo) >> 20), (unsigned long long)((x - b->lo) >> 20), (unsigned long long)((b->b - x) >> 20), parts);
 }
 static int big_lookup(big_pool *b, uint64_t addr, uint64_t len) {
     if (addr + len > b->hi) return -1;
@@ -6415,13 +6500,31 @@ static const img_ent *msl_image_file(NSString *path, romfs_img **img) {
     *img = m;
     return m ? msl_image_find(m, path.lastPathComponent.UTF8String) : NULL;
 }
+// A compressed file of the image (msl_imgz.h, shader_lib.py compress), decoded as it loads; DM_MSL_IMGZ=0 refuses it instead (the file is named and its load fails, as on a host
+// from before this). On a 20.7 GB library (7.5 GB compressed): frame times within noise, boot unchanged, footprint +120-160 MB (Metal keeps the decoded bytes while a library
+// lives: a mapped library's pages are page cache, a decoded one's are the process's). Returns the original bytes (malloc'd) or NULL with *why set. The totals go to the log at the 1st, 2nd, 4th, 8th ... file
+static _Atomic uint64_t g_imgz_n, g_imgz_in, g_imgz_out, g_imgz_ns, g_imgz_max_ns;
+static void *msl_imgz_take(const void *p, size_t n, size_t *len, const char *name, const char **why) {
+    static int on; static dispatch_once_t once; dispatch_once(&once, ^{ const char *e = getenv("DM_MSL_IMGZ"); on = !(e && *e == '0'); });   // the loads run on several threads (prefetch, prepare workers)
+    static _Atomic uint32_t refused;   // a file may load many times (the prebuild loads a pair's libraries for each pair): the first 16 refusals, then every 2^k-th, are named
+    if (!on) { uint32_t r = atomic_fetch_add(&refused, 1) + 1; if (r <= 16 || !(r & (r - 1))) MLOG("[RED] shader library file %s is compressed (DMZ1) and DM_MSL_IMGZ=0 refuses it: it fails to load (%u refused)", name, r); *why = "compressed library file (DM_MSL_IMGZ=0 refuses it)"; return NULL; }
+    uint64_t t0 = now_ns(); void *o = msl_imgz_decode(p, n, len, why); uint64_t dt = now_ns() - t0;
+    if (!o) { uint32_t r = atomic_fetch_add(&refused, 1) + 1; if (r <= 16 || !(r & (r - 1))) MLOG("[RED] shader library file %s: cannot decode: %s (%u refused)", name, *why, r); return NULL; }
+    uint64_t k = atomic_fetch_add(&g_imgz_n, 1) + 1, in = atomic_fetch_add(&g_imgz_in, n) + n, out = atomic_fetch_add(&g_imgz_out, *len) + *len, ns = atomic_fetch_add(&g_imgz_ns, dt) + dt;
+    uint64_t mx = atomic_load(&g_imgz_max_ns); while (dt > mx && !atomic_compare_exchange_weak(&g_imgz_max_ns, &mx, dt)) {}
+    if (!(k & (k - 1))) MLOG("compressed shader library: %llu files decoded, %.1f MB -> %.1f MB, %.1f ms in all (largest %.0f us)", k, in / 1e6, out / 1e6, ns / 1e6, (dt > mx ? dt : mx) / 1e3);
+    return o;
+}
 static NSData *msl_data(NSString *path) {   // a file of the library, nil when it has none
     NSData *d = [NSData dataWithContentsOfFile:path];
     if (d) return d;
     romfs_img *m; const img_ent *x = msl_image_file(path, &m);
     if (!x) return nil;
     NSMutableData *o = [NSMutableData dataWithLength:(NSUInteger)x->b];
-    return romfs_image_read(m->fd, o.mutableBytes, (size_t)x->b, (off_t)x->a) ? o : nil;
+    if (!romfs_image_read(m->fd, o.mutableBytes, (size_t)x->b, (off_t)x->a)) return nil;
+    if (!msl_imgz_is(o.bytes, o.length)) return o;
+    size_t len; const char *why; void *raw = msl_imgz_take(o.bytes, o.length, &len, path.lastPathComponent.UTF8String, &why);
+    return raw ? [NSData dataWithBytesNoCopy:raw length:len freeWhenDone:YES] : nil;
 }
 static NSString *exe_rel(const char *rel) {
     char buf[4096]; uint32_t n = sizeof buf;
@@ -6652,8 +6755,15 @@ static NSString *lib_digest(const void *p, size_t n) {
 static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
     int fd = open(path.fileSystemRepresentation, O_RDONLY); struct stat st;
     if (fd < 0) {   // not in the folder: the library's image, whose one descriptor is shared, and only this file's pages are mapped
-        int open_errno = errno; romfs_img *img; const img_ent *x = msl_image_file(path, &img); msl_map f;
-        if (x && msl_image_map(img, x, &f)) {
+        int open_errno = errno; romfs_img *img; const img_ent *x = msl_image_file(path, &img); msl_map f = {0};
+        if (x && msl_image_map(img, x, &f) && msl_imgz_is(f.data, f.size)) {   // compressed: the original bytes, which Metal holds while the library lives
+            size_t len; const char *why; void *raw = msl_imgz_take(f.data, f.size, &len, path.lastPathComponent.UTF8String, &why); munmap(f.base, f.base_len);
+            if (!raw) { if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:EINVAL userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@: %s", path, why]}]; return nil; }
+            NSString *tag = lib_digest(raw, len);   // before the data object owns raw: the digest of the original bytes, as the plain image's file gets
+            dispatch_data_t d = dispatch_data_create(raw, len, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), DISPATCH_DATA_DESTRUCTOR_FREE);
+            return lib_tag([g_dev newLibraryWithData:d error:err], tag);
+        }
+        if (x && f.base) {
             void *base = f.base; size_t base_len = f.base_len;
             dispatch_data_t d = dispatch_data_create(f.data, f.size, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ munmap(base, base_len); });
             return lib_tag([g_dev newLibraryWithData:d error:err], lib_digest(f.data, f.size));
@@ -12570,14 +12680,20 @@ static id<MTLBuffer> gmem_map(void) {
     for (int k = 1; k < DMSH_GMEM_MAP_ENTRIES; k++) memset(t + (size_t)k * DMSH_GMEM_MAP_ENTRY, 0xff, 8);
     int n = 1, over = 0; uint64_t end = 0;
     pthread_mutex_lock(&g_mu);
-    for (int k = 0; k < g_nbig; k++) if (!g_big[k].full && addr_meets(g_big[k].lo, g_big[k].hi)) big_full(&g_big[k], "raw global memory's pool table");   // the pool table reaches all of a large pool
+    NSMutableArray<id<MTLBuffer>> *gone = nil;
+    for (int k = 0; k < g_nbig; k++) if (addr_meets(g_big[k].lo, g_big[k].hi)) big_cover(k, &gone);   // the pool table reaches all of a large pool
+    if (gone) pool_gone_release(gone);
     gen = atomic_load(&g_pool_gen); pidx_sort();
     for (int k = 0; k < g_npool; k++) {
         pool_ent *p = &g_pools[g_pidx[k]];
-        if (!addr_meets(p->lo, p->hi)) continue;
-        if (!p->res) { res_add(p->buf); p->res = 1; g_pool_res_n++; }
+        int meets = addr_meets(p->lo, p->hi);
+        if (!meets && p->reach == REACH_PART) for (int b = 0; b < g_nbig && !meets; b++) meets = g_big[b].mem == p->key && addr_meets(g_big[b].lo, g_big[b].hi);   // a part stands for its pool, as the whole buffer did
+        if (!meets) continue;
         uint64_t lo = MAX((uint64_t)p->lo, end), hi = p->hi;
-        if (lo >= hi) continue;
+        if (lo >= hi) continue;   // the entries before it hold its range: its buffer is not wired for the table's sake (a lookup that gets it wires it, pool_res)
+        int longer = 0; for (int j = k + 1; j < g_npool && g_pools[g_pidx[j]].lo == p->lo && !longer; j++) longer = g_pools[g_pidx[j]].hi > p->hi;
+        if (longer) continue;   // one from the same start reaches further and holds all of it (a large pool's whole buffer beside its chunk of the first stride)
+        if (!p->res) { res_add(p->buf); p->res = 1; g_pool_res_n++; }
         if (n == DMSH_GMEM_MAP_ENTRIES) { over++; continue; }
         uint64_t e[3] = {lo, hi, p->gpu - p->base}; memcpy(t + (size_t)n++ * DMSH_GMEM_MAP_ENTRY, e, sizeof e); end = hi;
     }
@@ -16222,6 +16338,29 @@ static uint64_t loop_state(NvShader *cs) {
     }
     return cs->loop_gpu;
 }
+// Indirect dispatch clamp: a GPU-written {x, y, z} of more than DPC_MAXTOTAL threadgroups in all dispatches nothing; any
+// other record passes unchanged. Real frames stay far below (PRAGMATA's largest direct dispatch: 96 x 54); a group count the GPU wrote from bad data would otherwise run
+// for ever, and committed work is not reclaimed when the process exits. No dimension is cut on its own: a 1D dispatch of more than 65535 groups is a real one, and cutting
+// it (as a first version did) left part of its work undone
+#define DPC_MAXTOTAL (1u << 22)
+static int dpc_clamp_enc(id ce, uint64_t rec, __strong id<MTLBuffer> *ob, size_t *oo, uint64_t *og) {
+    static id<MTLComputePipelineState> ps; static id<MTL4ArgumentTable> at; static int failed;
+    if (failed) return 0;
+    if (!ps) { NSError *e = nil; id<MTLLibrary> lib = host_lib("ixc", &e); id<MTLFunction> f = [lib newFunctionWithName:@"dpc_clamp"];
+        ps = f ? [g_dev newComputePipelineStateWithFunction:f error:&e] : nil;
+        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxBufferBindCount = 1; at = ps ? rec_table([g_dev newArgumentTableWithDescriptor:ad error:&e]) : nil;
+        if (!at) { failed = 1; MLOG("[RED] indirect dispatch clamp: cannot create its pipeline: %s (indirect dispatches run unclamped)", e.localizedDescription.UTF8String); return 0; }
+        MLOG("indirect dispatch clamp on: a GPU-written group count of more than %u threadgroups in all dispatches nothing", DPC_MAXTOTAL); }
+    typedef struct { uint64_t rec, out; uint32_t maxtotal; } djob;
+    size_t off = arena_alloc(16 + sizeof(djob), ob); uint8_t *p = (uint8_t *)(*ob).contents + off;
+    *oo = off; *og = (*ob).gpuAddress + off;
+    *(djob *)(p + 16) = (djob){rec, *og, DPC_MAXTOTAL};
+    id<MTL4ComputeCommandEncoder> e = (id<MTL4ComputeCommandEncoder>)ce;
+    [at setAddress:*og + 16 atIndex:0]; [e setArgumentTable:at]; [e setComputePipelineState:ps];
+    [e dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [e barrierAfterEncoderStages:MTLStageDispatch beforeEncoderStages:MTLStageDispatch | MTLStageBlit visibilityOptions:resource_vis()];
+    return 1;
+}
 static void dispatch_(const p_dispatch *dp) {
     g_wr_epoch++; g_mdx_epoch++;
     if (!S.cprog) { RED_ONCE(27, "no program bound before the dispatch"); return; }
@@ -16302,6 +16441,12 @@ static void dispatch_(const p_dispatch *dp) {
     encode_args(nil, cs, 5, 0);
     if (own && g_blit) { enc_b_end(g_blit); g_blit = nil; }
     id<MTLComputeCommandEncoder> ce = own ? pg_compute() : (id<MTLComputeCommandEncoder>)dispatch_enc_cs(cs, dp->ind);
+    if (dp->ind) {   // the GPU-written group counts, clamped into the frame arena first (see dpc_clamp); the dispatch and the c0 copy below read the clamped ones
+        uint64_t cg; id<MTLBuffer> cb_; size_t co;
+        if (dpc_clamp_enc(ce, ig, &cb_, &co, &cg)) { ib = (__bridge void *)cb_; io = co; ig = cg; }
+        if (own) [(id<MTL4ComputeCommandEncoder>)ce setArgumentTable:g_ct]; else { [(id<MTL4ComputeCommandEncoder>)ce setArgumentTable:g_ct]; g_blit_ct = 1; }
+        args_dirty_all();
+    }
     enc_c_pso(ce, ps);
     if (cs->rf.loop_sites) enc_c_args(ce, loop_state(cs), DMSH_LOOP_SLOT);
     if (tg_groups) {
@@ -17299,8 +17444,13 @@ static const char *cctx_snap(void) {
 }
 // When the game itself asks for 30 fps (pacing by the game's present interval, interval 2, hle_nvn.c) the display link runs at 30 Hz too: games whose logic counts frames, such as Engage, are not pulled up to 60 fps by the display link on iOS
 __attribute__((weak)) int nvn_game_fps(void) { return 60; }   // hle_nvn.c provides the strong definition
+__attribute__((weak)) int nvn_link_fps_cap(void) { return 0; }   // hle_nvn.c provides the strong definition: the player's Frame rate where only the display link can cap it
 int mtl_fps_target(void) { static int env = -2; if (env == -2) { const char *e = getenv("DM_FPS"); env = e ? atoi(e) : -1; if (env != 30 && env != 60) env = -1; else MLOG("DM_FPS=%d: frame rate pinned by the test switch", env); }
-    int g = nvn_game_fps(); return env > 0 ? env : g == 30 || g == 120 ? g : 60; }
+    int g = nvn_game_fps(); int t = env > 0 ? env : g == 30 || g == 120 ? g : 60;
+    // The player's Frame rate where the host cannot make the game step by it (hle_nvn.c nvn_link_fps_cap): the display link runs at 30 Hz and the game's own present
+    // interval stays, so it steps by the time that passed. Only a cap below the game's rate applies; 60 leaves the game's own rate alone
+    int c = env > 0 ? 0 : nvn_link_fps_cap();
+    return c && t > c ? c : t; }
 // Hand a submission to the GPU in segments (DM_NVN_CUT=draw count, 0 = off; default 64): when the game holds back the next frame's submit until this frame's GPU work is done (The Legend of Zelda: Breath of the Wild: the main thread's nvnSyncWait on the fence of the frame just submitted),
 // the GPU sits idle for the milliseconds the host spends translating inside the submit (in the shrine each frame is GPU 13 ms + translation 7 ms back to back). Each time this many draws have accumulated, the command buffer encoded so far is committed between two passes: the GPU runs the earlier passes while the CPU translates the later ones.
 // Cut only when no encoder is open and no pass is deferred / merged / hoisted; commit this batch's uploads first (later draws use them). The fence signal and completion work stay on the last segment only: the queue executes in commit order and every encoder starts with a queue barrier

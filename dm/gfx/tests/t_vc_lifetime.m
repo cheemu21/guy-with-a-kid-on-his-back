@@ -3,8 +3,10 @@
 // sharing table lets go; its pool's finalization drops it; and when more textures go than the owner's list of released objects holds, the commit checks every texture it keeps. A buffer
 // texture's 2D rows (tbuf_as_2d) first asked for after the game finalized it are kept with it while the owner holds it, not only in the table by what they view (g_tb2_gone)
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

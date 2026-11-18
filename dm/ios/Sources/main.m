@@ -8,6 +8,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <errno.h>
+#include <dlfcn.h>
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
 #include "romfs_image.h"
@@ -232,7 +235,32 @@ static NSString *program_env(void) {
 }
 static int g_boot_ok;
 
+// Opt-in: reserve and immediately release address space without committing RAM.
+// A guest IPA's requested entitlements do not establish the host process's rights.
+static void diagnostic_virtual_address_probe(void) {
+    const char *e = getenv("DM_VA_PROBE"); if (!e || strcmp(e, "1")) return;
+    void *security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+    CFTypeRef (*create)(CFAllocatorRef) = security ? dlsym(security, "SecTaskCreateFromSelf") : NULL;
+    CFTypeRef (*copy)(CFTypeRef, CFStringRef, CFErrorRef *) = security ? dlsym(security, "SecTaskCopyValueForEntitlement") : NULL;
+    CFTypeRef task = create ? create(NULL) : NULL;
+    for (NSString *key in @[@"com.apple.developer.kernel.extended-virtual-addressing", @"com.apple.developer.kernel.increased-memory-limit", @"get-task-allow"]) {
+        CFTypeRef value = task && copy ? copy(task, (__bridge CFStringRef)key, NULL) : NULL;
+        fprintf(stderr, "[va-probe] process entitlement %s=%s\n", key.UTF8String, value ? (CFEqual(value, kCFBooleanTrue) ? "true" : "false") : "absent/unknown");
+        if (value) CFRelease(value);
+    }
+    if (task) CFRelease(task);
+    if (security) dlclose(security);
+    const unsigned sizes[] = {4, 6, 8, 16, 32, 64, 74};
+    for (unsigned i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        size_t n = (size_t)sizes[i] << 30; errno = 0;
+        void *a = mmap(NULL, n, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0); int err = errno;
+        fprintf(stderr, "[va-probe] reserve %u GiB: %s errno=%d\n", sizes[i], a == MAP_FAILED ? "failed" : "ok", a == MAP_FAILED ? err : 0);
+        if (a != MAP_FAILED) munmap(a, n);
+    }
+    fflush(stderr);
+}
 static void *boot_thread(void *p) {
+    diagnostic_virtual_address_probe();
     (void)p;
     static char alt[65536]; stack_t ss = {.ss_sp = alt, .ss_size = sizeof alt}; sigaltstack(&ss, 0);   // crash printing must work on the host thread too
     int rc = dm_main(g_argc, g_argv);

@@ -2,8 +2,10 @@
 // from the table's log, or a copy of the whole table when the table has no spare of its own, none of them finished, or the log has moved past them. Each case holds what the table
 // holds; a table built anew takes nothing from the spares of its earlier build, and the spares stay within their byte cap
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft

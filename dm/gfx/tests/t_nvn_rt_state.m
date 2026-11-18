@@ -1,8 +1,10 @@
 // Public command recording and real queue/program ownership. The marker is
 // deliberately not an RT implementation; no pipeline or trace is submitted.
 #define nvn_game_fps nvn_game_fps_mtl_default
+#define nvn_link_fps_cap nvn_link_fps_cap_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#undef nvn_link_fps_cap
 static int test_rt_program_set(prog_t *,int,const NVNshaderData *,uint32_t,uint32_t,uint32_t);
 static void test_rt_group_handle(const prog_t *,const int32_t[3],void *);
 #define mtl_rt_program_set test_rt_program_set
