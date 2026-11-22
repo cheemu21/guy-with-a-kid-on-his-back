@@ -98,11 +98,14 @@ int own_upgrade(id from, id to, uint64_t serial, id put);
 // Shared textures another one drew over (nvn_mtl.m's tu_pass, nvn_owner.m says why). The replay layer keeps two stamps of a texture it covers, in its own clock (0: none)
 typedef struct { uint32_t use, wr; } own_use;   // its last use (a read or a write) and its last write by the GPU
 typedef int (*own_use_fn)(id o, own_use *u);    // o's stamps: 1; 0 for a texture the release does not cover (it is never released, and its writes count for nothing)
-typedef struct { uint32_t n, serials, pinned; uint64_t bytes; } own_dead_stats;   // released, serial entries (live and ghost) they took with them, candidates a pin kept
+typedef struct { uint32_t n, serials, pinned; uint64_t bytes; uint32_t idle_n; uint64_t idle_bytes; } own_dead_stats;   // released, serial entries (live and ghost) they took with them, candidates a pin kept; of the released, those that went for idleness alone (g_own_idle_any)
 // Each entry use_of covers whose last use is `idle` or more before `now`, that no lookup found in the last ALIAS_IDLE submissions and no pin holds, and whose bytes another
 // covered entry of its pool wrote after that last use, goes, max of them at most: from every serial entry that names it or a view of it (each a note), then from the sharing table
 // (retired). use_of is asked of every entry. *serials (malloc'ed, the caller frees it; NULL when none) lists the serials whose entries went, *nserials of them. Caller holds g_smu
 own_dead_stats own_alias_dead_locked(uint32_t now, uint32_t idle, own_use_fn use_of, uint32_t max, uint64_t **serials, uint32_t *nserials);
+// An entry unused for g_own_idle_any or more (the same clock as now; 0: never) goes even if no other entry drew over it (nvn_mtl.m DM_NVN_RT_IDLE_S): PRAGMATA held 604 MB of
+// shared render targets in the sharing table alone, the oldest unused for 41,093 submissions, at 9.3 GB of an 8 GB working set (V18). Made again at its next use, filled as a new texture is
+extern uint32_t g_own_idle_any;
 // Caller holds g_smu
 // A pool's Finalize: its sharing-table entries go (retired, own_hook_drop; a new epoch), so do the entries of its live texture objects, whatever they hold, and every serial entry,
 // live or ghost, that names one of those textures, one of `also` (may be NULL) or a part of one (own_hook_parts), or a view of one (each a note). → how many sharing-table entries

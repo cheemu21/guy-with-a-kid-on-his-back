@@ -310,7 +310,22 @@ NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, 
 }
 // A GPU address exists only once the driver has given one: here, by a buffer (nvnBufferInitialize) or by a texture (nvnTextureGetTextureAddress). Raw global memory can reach only what these name (mtl_pool_addressed)
 static void pool_mark_addressed(const pool_t *o) { vpool_taken(o); static __thread const uint8_t *last; if (o->mem && o->mem != last) { last = o->mem; mtl_pool_addressed(o->mem, o->size); } }
-NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { pool_mark_addressed((const pool_t *)p); return (NVNbufferAddress)((const pool_t *)p)->mem; }
+// A shader-code pool's own address (NVN_MEMORY_POOL_FLAGS_SHADER_CODE, 0x40; not virtual, 0x200) is asked for to place programs: nvnProgramSetShaders takes code addresses. The GPU never
+// reads that code here (the shaders run translated, their constants copied into the host's buffers), so the pool does not go into the raw pool table, where it would be resident and its
+// pages wired: Ocarina of Time on an iPhone 17, 223 such pools, 317 MB (upstream PR #1971, a1ba253, ported by hand: this base has no address kinds). A buffer made in the pool still puts it
+// in (nvnBufferInitialize). DM_NVN_CODE_POOL_RAW=1: such a pool goes in as before
+static int code_pool_raw(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_CODE_POOL_RAW"); v = e && atoi(e) > 0; } return v; }
+static uint64_t g_code_pools_kept_out, g_code_pool_bytes_kept_out;
+NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) {
+    const pool_t *o = (const pool_t *)p;
+    if ((o->flags & (NVN_MEMORY_POOL_FLAGS_SHADER_CODE | NVN_MEMORY_POOL_FLAGS_VIRTUAL)) == NVN_MEMORY_POOL_FLAGS_SHADER_CODE && !code_pool_raw()) {
+        static __thread const uint8_t *last;
+        if (o->mem && o->mem != last) { last = o->mem; g_code_pools_kept_out++; g_code_pool_bytes_kept_out += o->size;
+            if (g_code_pools_kept_out == 1 || g_code_pools_kept_out % 64 == 0) LOG("raw global memory: shader-code pools whose own address the game asks for stay out of the pool table (%llu so far, %llu MB)",
+                (unsigned long long)g_code_pools_kept_out, (unsigned long long)(g_code_pool_bytes_kept_out >> 20)); }
+    } else pool_mark_addressed(o);
+    return (NVNbufferAddress)o->mem;
+}
 
 // ---------- Descriptor pools ----------
 // One ID space per pool. In NVN a texture or sampler ID indexes the pool the command buffer has bound (SetTexturePool / SetSamplerPool), and two pools may use the same IDs. The replay keeps
@@ -2465,9 +2480,18 @@ static int fps_present_cap(void) {
         if (g_present_cap && !dm_fps_lock_engine() && display_mode())
             LOG("[nvn] present cap %d fps (%s) applied by the present interval alone: display mode, and this main has no engine frame limit the host writes", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target");
         else if (g_present_cap && !dm_fps_lock_engine()) {
-            LOG("[nvn] present cap %d fps (%s) not the present interval: this main has neither a frame step nor an engine frame limit the host writes, so the game's own present interval stays%s", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target",
-                g_present_cap == 30 ? "; the display link runs at 30 Hz instead (nvn_link_fps_cap)" : "");
-            g_present_cap=0;
+            // With frame generation (DM_FRAMEGEN=1) a 30 cap is the present interval after all: frame generation keeps the display link at 60 Hz (nvn_mtl.m link_30hz) and makes
+            // frames only for presents held 1.5 ticks or more, so the 30 Hz link alone left PRAGMATA uncapped on a 60 Hz link, its presents of one tick each and no frame
+            // generated (iPhone 18 Pro, V10/V11: "the interpolation takes only 0.0 ms", 287-300 frames shown in 300 ticks at 20-26 ms of GPU). The acquire then waits two
+            // vsyncs (mtl_link_wait_tick: one tick of a 30 Hz link, where frame generation is not supported), and the game still reads back its own interval (window_interval)
+            const char *fg = getenv("DM_FRAMEGEN");
+            if (g_present_cap == 30 && fg && atoi(fg) > 0)
+                LOG("[nvn] present cap 30 fps (%s) applied by the present interval: frame generation shows 60 on the 60 Hz link and needs each present held two ticks; the game's own interval is what it reads back", e ? "DM_FPS_TARGET" : "game profile fps_target");
+            else {
+                LOG("[nvn] present cap %d fps (%s) not the present interval: this main has neither a frame step nor an engine frame limit the host writes, so the game's own present interval stays%s", g_present_cap, e ? "DM_FPS_TARGET" : "game profile fps_target",
+                    g_present_cap == 30 ? "; the display link runs at 30 Hz instead (nvn_link_fps_cap)" : "");
+                g_present_cap=0;
+            }
         }
     }
     return g_present_cap;

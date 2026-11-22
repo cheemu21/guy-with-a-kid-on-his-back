@@ -229,6 +229,13 @@ int main(void) { @autoreleasepool {
     NVNtexture sx; h_nvnTextureBuilderSetWidth(&tb, 512); h_nvnTextureBuilderSetHeight(&tb, 512); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, 2ull << 30);
     CHECK("small sparse texture", h_nvnTextureInitialize(&sx, &tb));
     CHECK("stays whole", !resolve(&sx).isSparse);
+    // Single-level from 8 MB (sp_single_min): tiled, as PRAGMATA's streamed 8192x4096 BC6H texture (32 MB) needs; still whole below that
+    NVNtexture s1; h_nvnTextureBuilderSetWidth(&tb, 2048); h_nvnTextureBuilderSetHeight(&tb, 2048); h_nvnTextureBuilderSetLevels(&tb, 1); h_nvnTextureBuilderSetFlags(&tb, NVN_TEXTURE_FLAGS_SPARSE); h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, 2ull << 30);
+    CHECK("single-level 16 MB sparse texture", h_nvnTextureInitialize(&s1, &tb));
+    CHECK("is tiled", resolve(&s1).isSparse == !getenv("DM_NVN_SPARSE_SINGLE_MB"));
+    NVNtexture s2; h_nvnTextureBuilderSetWidth(&tb, 1024); h_nvnTextureBuilderSetHeight(&tb, 1024); h_nvnTextureBuilderSetStorage(&tb, (const NVNmemoryPool *)&g_sparse, 2ull << 30);
+    CHECK("single-level 4 MB sparse texture", h_nvnTextureInitialize(&s2, &tb));
+    CHECK("stays whole below 8 MB", !resolve(&s2).isSparse);
     // The physical pool's Finalize gives back the heap tiles kept for its memory
     uint64_t kept = kept_for(phys, plen), live2 = g_sp_live;
     CHECK("tiles kept for the pool's memory", kept >= 1);

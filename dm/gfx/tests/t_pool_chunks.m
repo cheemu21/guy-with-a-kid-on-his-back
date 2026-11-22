@@ -175,13 +175,14 @@ int main(void) { @autoreleasepool {
         int before = g_npool;
         CHECK("unknown extent: not the short chunk the cache holds", mtl_gpu_addr(at, 1, &mb, &mo, &gpu) && (__bridge id<MTLBuffer>)mb != short_view);
         id<MTLBuffer> whole = (__bridge id<MTLBuffer>)mb;
-        CHECK("unknown extent: one buffer of the whole pool", (uint64_t)(uintptr_t)whole.contents <= ub && (uint64_t)(uintptr_t)whole.contents + whole.length == ub + GB && g_npool == before + 1);
+        CHECK("unknown extent: one buffer of the whole pool", (uint64_t)(uintptr_t)whole.contents <= ub && (uint64_t)(uintptr_t)whole.contents + whole.length == ub + GB && g_npool == before + (big_shed_on() ? 0 : 1));   // (big_shed: the short chunk left the table as it came)
         CHECK("its GPU address is the buffer's", gpu == whole.gpuAddress + mo);
         for (unsigned k = 1; k < 20; k++) CHECK("unknown extent at other strides: the same buffer", mtl_gpu_addr(ub + k * 32 * MB + 4, 1, &mb, &mo, &gpu) && (__bridge id<MTLBuffer>)mb == whole);
         CHECK("at the end, unknown: the same buffer", mtl_gpu_addr(ub + GB - 8, 1, &mb, &mo, &gpu) && (__bridge id<MTLBuffer>)mb == whole);
-        CHECK("and lookups of known length take it too", look(ub + 700 * MB, 4096) == whole && g_npool == before + 1);
+        CHECK("and lookups of known length take it too", look(ub + 700 * MB, 4096) == whole && g_npool == before + (big_shed_on() ? 0 : 1));
         int kept = 0; for (int i = 0; i < g_npool; i++) kept |= g_pools[i].buf == short_view;
-        CHECK("the short chunk stays for what was encoded with it", kept);
+        if (big_shed_on()) CHECK("big_shed: the short chunk leaves the table, to deferred release (what was encoded with it runs first)", !kept && g_big_shed >= 1);
+        else CHECK("DM_NVN_BIG_SHED=0: the short chunk stays for what was encoded with it", kept);
         // The GPU reaches 96 MB past the address through it, past what the 64 MB guess held
         NSError *err = nil;
         id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal; kernel void beyond(device uchar *p [[buffer(0)]]) { p[96u * 1024u * 1024u] = 0x7b; }" options:nil error:&err];

@@ -35,7 +35,8 @@
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
 enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_GAME,   // which control a touch holds; C_GAME: none, the touch goes to the game's touch screen (finger slot << 8)
-       C_ZL, C_HUB, C_ZLOFF };   // Orbit: the ZL pad (held, or locked by a double tap), the ZR hub (also the right stick), the tap that lets a locked ZL go (presses nothing)
+       C_ZL, C_HUB, C_ZLOFF, C_FIRE2 };   // Orbit: the ZL pad (held, or locked on by a short tap), the ZR hub (also the right stick), the tap that lets a locked ZL go (presses nothing),
+                                          // the second fire key (ZR only, shown while ZL is on)
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_shake_btn;
@@ -156,6 +157,7 @@ static void pads_start(void);   // Physical controllers, below
     NSMapTable<UITouch *, NSNumber *> *_faceOf;    // which keys each touch on the diamond currently holds
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
     CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
+    CAShapeLayer *_knobIn;                         // the knob's inner shape: a ring in the classic look, the grip dots in Orbit's (held here: Orbit adds other sublayers to the knob)
     DmMenuButton *_menu;                           // opens the in-game menu (GameMenu.swift)
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
     unsigned _hapticSticks;
@@ -166,10 +168,13 @@ static void pads_start(void);   // Physical controllers, below
     DmLayout _layout;
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
     // The Orbit layout (profile touch_style orbit, DM_GAME_TOUCH_STYLE; see "Orbit" below)
-    CAShapeLayer *_icon[B_N + 1], *_tag[B_N + 1], *_arrow[4];   // line icon and letter tag per key (B_N: the Overdrive key); the face keys' cursor arrows in hacking mode
+    CAShapeLayer *_icon[B_N + 2], *_tag[B_N + 2], *_arrow[4];   // line icon and letter tag per key (B_N: the Overdrive key, B_N + 1: the second fire key); the face keys' cursor arrows in hacking mode
     CAShapeLayer *_od; CATextLayer *_odLabel;      // the Overdrive key (LS + RS)
-    CATextLayer *_hackHint, *_lockHint, *_runHint;
-    BOOL _zlLocked; double _zlUp;                  // ZL locked on by a double tap; when it was last let go
+    CAShapeLayer *_fire2; CATextLayer *_fire2Label;   // the second fire key (ZR), top left, shown while ZL is on
+    CAGradientLayer *_knobShade; CAShapeLayer *_knobShadeMask, *_knobLip;   // the knob's nub look: concave shading (masked to the knob), the lip near its edge; its grip dots are the knob's first sublayer
+    CAShapeLayer *_dpadGuide, *_dchev[4];          // the D-pad's faint circle and its arms' chevrons (left, up, right, down: B_LEFT order)
+    CATextLayer *_lockHint;
+    BOOL _zlLocked; double _zlDown; UITouch *_zlTouch;   // ZL locked on by a short tap; the touch pressing it and when it came down
     UITouch *_hubAim;                              // the ZR hub's touch, which drives the right stick from where it landed
     UITouch *_rsTouch; double _lookTap; CGPoint _lookTapAt;   // a double tap in the aim area holds RS; the last tap there
     CGPoint _lCentre;                              // the floating left stick's centre while held
@@ -178,6 +183,10 @@ static void pads_start(void);   // Physical controllers, below
 
 static UIColor *k_idle, *k_on, *k_line, *k_ringFill, *k_text, *k_textOn;
 static UIColor *k_badge, *k_micro, *k_onLine, *k_accent, *k_capFill;   // the Orbit look's other colours: tag fill, hint text, pressed outline, PRAGMATA's blue, the knob's cap
+static UIColor *k_stickLine, *k_guide;   // Orbit's stick rim; the D-pad's faint circle (unused since V23)
+// The stick as the Ocarina of Time port draws it (kid-with-sword-remake L8.1, Native layout, the player's choice): a faint white ring and a plain translucent white knob, brighter while
+// held, each with a thin white outline and a soft shadow; no grip dots, shading or lip
+static UIColor *k_okRing, *k_okLine, *k_okKnob, *k_okKnobOn;
 static CAShapeLayer *shape(CALayer *parent) {
     CAShapeLayer *l = [CAShapeLayer layer];
     l.fillColor = k_idle.CGColor; l.strokeColor = k_line.CGColor; l.lineWidth = 1.5;
@@ -218,10 +227,13 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
                 #define W(a) [UIColor colorWithWhite:1 alpha:fmin((a) * k, 1)]
                 #define INK(a) [UIColor colorWithRed:8 / 255.0 green:14 / 255.0 blue:22 / 255.0 alpha:fmin((a) * k, 0.9)]
                 k_idle = INK(0.42); k_ringFill = INK(0.24); k_line = W(0.78); k_text = W(0.95); k_badge = INK(0.62); k_capFill = W(0.22);
+                k_stickLine = W(0.6); k_guide = W(0.16);
+                k_okRing = W(0.06); k_okLine = W(0.38); k_okKnob = W(0.14); k_okKnobOn = [UIColor colorWithWhite:1 alpha:0.45];
                 #undef W
                 #undef INK
-                k_micro = [UIColor colorWithRed:140 / 255.0 green:190 / 255.0 blue:1 alpha:0.95];
-                k_accent = [UIColor colorWithRed:58 / 255.0 green:139 / 255.0 blue:1 alpha:1]; k_on = [k_accent colorWithAlphaComponent:0.62]; k_onLine = k_textOn = UIColor.whiteColor;
+                // the blue is a near-white one with only a hint of blue, at low opacity (the player's choice, V7): what is on reads as a light tint, not a coloured fill or a strong glow
+                k_micro = [UIColor colorWithRed:236 / 255.0 green:242 / 255.0 blue:250 / 255.0 alpha:0.9];
+                k_accent = [UIColor colorWithRed:226 / 255.0 green:236 / 255.0 blue:250 / 255.0 alpha:0.9]; k_on = [k_accent colorWithAlphaComponent:0.3]; k_onLine = k_textOn = UIColor.whiteColor;
                 if (e) LOG("front end: touch controls at %d %% opacity (DM_TOUCH_OPACITY)", (int)lrint(k * 100));
             } else {
                 k_idle = [UIColor colorWithWhite:1 alpha:0.14]; k_on = [UIColor colorWithWhite:1 alpha:0.45]; k_line = [UIColor colorWithWhite:1 alpha:0.38];
@@ -234,7 +246,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         _ring = shape(_controls); _ring.fillColor = k_ringFill.CGColor;
         _knob = shape(_controls);
         CAShapeLayer *in = [CAShapeLayer layer]; in.fillColor = nil; in.strokeColor = k_line.CGColor; in.lineWidth = 1.5;   // inner ring of the knob
-        [_knob addSublayer:in];
+        [_knob addSublayer:in]; _knobIn = in;
         static NSString *const names[B_N] = {@"A", @"B", @"X", @"Y", @"L3", @"R3", @"L", @"R", @"ZL", @"ZR", @"+", @"−"};
         for (int b = 0; b < B_N; b++) {
             _key[b] = shape(_controls);
@@ -244,9 +256,16 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         if (DM_GAME_TOUCH_STYLE) {
             _od = shape(_controls); _icon[B_N] = line(_od, k_text, 1.7); _tag[B_N] = shape(_od); _tag[B_N].fillColor = k_badge.CGColor; _tag[B_N].lineWidth = 1; _odLabel = label(_tag[B_N], @"OD");
             for (int i = 0; i < 4; i++) { _arrow[i] = line(_key[B_A + i], k_text, 1.7); _arrow[i].hidden = YES; }
-            _hackHint = label(_controls, @"HACKING"); _lockHint = label(_controls, @"LOCKED"); _runHint = label(_controls, @"RUN"); _hackHint.hidden = _lockHint.hidden = _runHint.hidden = YES;
-            _runHint.foregroundColor = k_micro.CGColor;
-            _hackHint.foregroundColor = _lockHint.foregroundColor = k_micro.CGColor;
+            _fire2 = shape(_controls); _icon[B_N + 1] = line(_fire2, k_text, 1.7); _tag[B_N + 1] = shape(_fire2); _tag[B_N + 1].fillColor = k_badge.CGColor; _tag[B_N + 1].lineWidth = 1;
+            _fire2Label = label(_tag[B_N + 1], @"ZR"); _fire2.hidden = YES;
+            // the knob as an analog nub: a soft diagonal shade (lighter top left, darker bottom right: a shallow dish), its grip dots (the knob's first sublayer, set in orbitLayout) and a lip
+            _knobShade = [CAGradientLayer layer]; _knobShade.startPoint = CGPointMake(0.15, 0.1); _knobShade.endPoint = CGPointMake(0.85, 0.95);
+            _knobShade.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.16].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.28].CGColor];
+            _knobShade.locations = @[@0, @0.5, @1]; _knobShadeMask = [CAShapeLayer layer]; _knobShade.mask = _knobShadeMask; [_knob insertSublayer:_knobShade atIndex:0];
+            _knobLip = line(_knob, [UIColor colorWithWhite:1 alpha:0.28], 1);
+            _dpadGuide = line(_controls, k_guide, 1); [_controls insertSublayer:_dpadGuide atIndex:0];   // under every key
+            for (int i = 0; i < 4; i++) _dchev[i] = line(_key[B_LEFT + i], k_text, 1.6);
+            _lockHint = label(_controls, @"LOCKED"); _lockHint.hidden = YES; _lockHint.foregroundColor = k_micro.CGColor;   // no HACKING or RUN text (the player's choice, V7)
         }
         _menu = [DmMenuButton buttonWithType:UIButtonTypeCustom];
         _menu.backgroundColor = k_idle; _menu.layer.borderColor = k_line.CGColor; _menu.layer.borderWidth = 1.5;
@@ -277,7 +296,8 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
     BOOL o = self.orbit;
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full) || (o && (b == B_LS || b == B_RS || (b == B_L && !_full)));   // Orbit: L3 by running, R3 by a double tap in the aim area
     _ring.hidden = _knob.hidden = _tap;
-    if (DM_GAME_TOUCH_STYLE) _od.hidden = _tap || !o;
+    if (DM_GAME_TOUCH_STYLE) { _od.hidden = _tap || !o; if (_tap || !o) _fire2.hidden = YES;   // the second fire key: shown by refresh while ZL is on
+        _dpadGuide.hidden = YES; for (int i = 0; i < 4; i++) _dchev[i].hidden = !o; }   // Orbit's landscape D-pad: its arrowheads, no circle (V23)
     [CATransaction commit];
 }
 - (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
@@ -299,7 +319,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
 
 // ---- Orbit (profile touch_style orbit: PRAGMATA) ----
 // A two-thumb landscape layout built around the game's controls: the ZR fire hub under the right thumb with A B X Y around it at their Switch places (hacking moves the cursor
-// with them while ZL is held: X up, B down, Y left, A right), R (dodge) above them on the right thumb's arc; ZL (aim; held, or locked by a double tap, for hacking), the Overdrive
+// with them while ZL is held: X up, B down, Y left, A right), R (dodge) above them on the right thumb's arc; ZL (aim; held, or locked on by a tap, for hacking; while it is on, a second fire key (ZR) shows at the top left for the left thumb), the Overdrive
 // key (LS + RS) and the D-pad (weapons) on the left thumb's arc; a floating left stick that runs (LS) past its rim; the right half of the screen aims (a double tap there holds RS).
 // White line icons with letter tags, no drop shadows and no decorative lines (no arcs, rings or aim marker: the player asked for the keys alone), auto-dim after 4 s with
 // nothing held. An arc position is an angle from the bottom edge and a radius from the corner
@@ -311,17 +331,19 @@ static const CGFloat
     O_R_ANGLE = 70, O_R_ARC = 240, O_R_R = 26,                                  // R: on the right arc, a little outside it
     O_RIGHT_IN = 30,                                                            // the right thumb's keys (hub, A B X Y, R) this much nearer the centre than the design's places
     O_ZL_ANGLE = 40, O_ZL_R = 30, O_ZL_HIT = 1.3, O_OD_ANGLE = 68, O_OD_R = 22,  // ZL and Overdrive on the left arc
-    O_DPAD_ANGLE = 14, O_DPAD_R = 38, O_ARM_W = 14, O_ARM_IN = 9,               // D-pad on the left arc (3D layout only)
-    O_STICK_R = 64, O_KNOB_R = 26, O_RUN = 1.2, O_ZONE_W = 0.42, O_ZONE_TOP = 110,   // floating stick: ring, knob; LS past this times the ring; its area: the left 42 % of the width, below 110
+    O_DPAD_ANGLE = 14, O_DPAD_R = 50, O_ARM_W = 18, O_ARM_IN = 11,              // D-pad on the left arc (3D layout only); 38 / 14 / 9 until V22, bigger at the player's request
+    O_STICK_R = 66, O_KNOB_R = 29, O_RUN = 1.2, O_ZONE_W = 0.42, O_ZONE_TOP = 110,   // floating stick: ring, knob; LS past this times the ring; its area: the left 42 % of the width, below 110
     O_LOOK_X = 0.5,                                                             // aim area: the right half
     O_PILL_DX = 44, O_PILL_Y = 20, O_PILL_R = 13.6, O_MENU_R = 12,              // − / + beside the menu at the top centre
-    O_KNOB_CAP = 0.55,                                                          // the knob's solid cap (times its radius)
+    O_DPAD_HEAD_W = 0.42, O_DPAD_HEAD_IN = 0.6, O_DPAD_HEAD_OUT = 0.86, O_DPAD_DX = 16, O_DPAD_DY = 12,          // D-pad arrowheads (Ocarina of Time port's): half-width (times the arm's), base and tip (times its radius); no circle around it since V23
     O_TOP_IN = 70,                                                              // − menu + at the top right: the menu this far in from the safe area's right edge (the player's choice)
     O_L_X = 44, O_L_Y = 40, O_L_R = 18,                                         // L (3D layout only; the game gives it no action)
+    O_F2_X = 132, O_F2_Y = 72, O_F2_R = 38,                                     // the second fire key (ZR), right of L at the top left: shown while ZL is on, for the left thumb; larger than the hub
+    O_ZL_TAP = 0.25,                                                            // ZL: a press shorter than this locks it on (a tap); a longer one is held and let go
     O_SIZE = 115,                                                               // the keys' size, % (a little larger than the design's first sizes)
     O_TAP2 = 0.28, O_TAP2_D = 40,                                               // double tap: within 280 ms and 40 u
     O_DIM_AFTER = 4, O_DIM = 0.45, O_DIM_FADE = 0.35;                           // auto-dim: after 4 s, to 45 %, over 350 ms
-enum { B_OD = B_N };   // the Overdrive key's index in the Orbit arrays and in a C_BTN owner
+enum { B_OD = B_N, B_F2 = B_N + 1 };   // the Overdrive key's index in the Orbit arrays and in a C_BTN owner; the second fire key's in the Orbit arrays
 static CGPoint arcAt(CGRect s, int right, CGFloat deg, CGFloat r) { CGFloat a = deg * M_PI / 180; return CGPointMake(right ? CGRectGetMaxX(s) - r * cos(a) : CGRectGetMinX(s) + r * cos(a), CGRectGetMaxY(s) - r * sin(a)); }
 - (BOOL)orbit { return DM_GAME_TOUCH_STYLE && !_layout.separated && self.bounds.size.width > self.bounds.size.height; }
 // Orbit's unit for its keys: u times the size, O_SIZE % by default (DM_TOUCH_SIZE in Documents/env.txt, 80-140 %). Keys, their places from the corners, gaps and the stick grow
@@ -364,12 +386,13 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
     case B_ZL: return arcAt(s, 0, O_ZL_ANGLE, O_ARC * u);
     case B_OD: return arcAt(s, 0, O_OD_ANGLE, O_ARC * u);
     case B_L: return CGPointMake(CGRectGetMinX(f) + O_L_X * u, CGRectGetMinY(f) + O_L_Y * u);
+    case B_F2: return CGPointMake(CGRectGetMinX(f) + O_F2_X * u, CGRectGetMinY(f) + O_F2_Y * u);
     default: return CGPointMake(CGRectGetMaxX(f) - O_TOP_IN * u + (b == B_PLUS ? O_PILL_DX : -O_PILL_DX) * u, CGRectGetMinY(f) + O_PILL_Y * u);   // top right: − left of the menu, + right of it
     }
 }
-- (CGFloat)oKeyR:(int)b { return (b == B_ZR ? O_HUB_R : b == B_R ? O_R_R : b == B_ZL ? O_ZL_R : b == B_OD ? O_OD_R : b == B_L ? O_L_R : O_PILL_R) * self.ou; }
+- (CGFloat)oKeyR:(int)b { return (b == B_ZR ? O_HUB_R : b == B_R ? O_R_R : b == B_ZL ? O_ZL_R : b == B_OD ? O_OD_R : b == B_L ? O_L_R : b == B_F2 ? O_F2_R : O_PILL_R) * self.ou; }
 - (CGFloat)oKeyDistance:(int)b point:(CGPoint)p {   // distance / hit radius (at least 22 points, half of a 44-point target)
-    CGPoint c = [self oKey:b]; CGFloat r = [self oKeyR:b] * (b == B_ZR ? O_HUB_HIT : b == B_ZL ? O_ZL_HIT : 1.35);
+    CGPoint c = [self oKey:b]; CGFloat r = [self oKeyR:b] * (b == B_ZR || b == B_F2 ? O_HUB_HIT : b == B_ZL ? O_ZL_HIT : 1.35);
     return hypot(p.x - c.x, p.y - c.y) / MAX(r, 22);
 }
 - (CGPoint)facePos:(int)b { CGPoint c = self.faceCenter; CGFloat g = self.faceGap;
@@ -393,7 +416,7 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
         return p;
     }
     CGRect s = self.corner; CGFloat u = self.u;
-    if (self.orbit) return arcAt(s, 0, O_DPAD_ANGLE, O_ARC * self.ou);
+    if (self.orbit) { CGPoint p = arcAt(s, 0, O_DPAD_ANGLE, O_ARC * self.ou); p.x += O_DPAD_DX * self.ou; p.y -= O_DPAD_DY * self.ou; return p; }   // V23: moved up and right for its larger size (its down arm clear of the home bar, its up arm clear of ZL)
     return side(s, 0, K_LOW_X * u, CGRectGetMaxY(s) - K_LOW_Y * u);
 }
 - (CGFloat)dpadR { return self.orbit ? O_DPAD_R * self.ou : K_DPAD_R * self.u; }
@@ -477,7 +500,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         if (c == C_BTN) btn |= (v >> 8) == B_OD ? 1ull << B_LS | 1ull << B_RS : 1ull << (v >> 8);   // Overdrive: LS + RS together
         else if (c == C_DPAD) dpad |= [self dpadAt:[t locationInView:self]];
         else if (c == C_ZL) btn |= 1ull << B_ZL;
-        else if (c == C_HUB) btn |= 1ull << B_ZR; }
+        else if (c == C_HUB || c == C_FIRE2) btn |= 1ull << B_ZR; }
     if (_zlLocked) btn |= 1ull << B_ZL;
     if (_rsTouch) btn |= 1ull << B_RS;
     if (_stick[0] && self.orbit) { CGPoint h = [self stickCentre:0]; if (dist(_stickNow[0], h) > [self stickR:0] * O_RUN) btn |= 1ull << B_LS; }   // run: past the rim
@@ -526,6 +549,7 @@ int front_web_touch(void);
 // Orbit: what a touch-down at p takes, in order: a locked key (R, − / +, L, Overdrive: btnAt), then the nearest of ZL, the ZR hub, the face keys and the D-pad by distance over
 // hit radius, then the move area (the floating stick, if free), then the aim area (the right stick, if free); C_NONE: the game's touch screen. *key: the key for C_BTN
 - (int)orbitKindAt:(CGPoint)p key:(int *)key {
+    if (!_fire2.hidden && [self oKeyDistance:B_F2 point:p] <= 1) return C_FIRE2;   // the second fire key, while it is shown (ZL on)
     int hit = [self btnAt:p]; if (hit >= 0) { *key = hit; return C_BTN; }
     CGFloat best = 1; int kind = C_NONE, d;
     CGFloat z = [self oKeyDistance:B_ZL point:p]; if (z <= best) { best = z; kind = C_ZL; }
@@ -543,10 +567,12 @@ int front_web_touch(void);
     int key = 0, kind = [self orbitKindAt:p key:&key]; double now = CACurrentMediaTime(); CGFloat u = self.u;
     switch (kind) {
     case C_BTN: [_owner setObject:@(C_BTN | (uint64_t)key << 8) forKey:t]; return;
-    case C_ZL:   // a second press within O_TAP2 of the last release locks ZL on, so the left thumb is free while the right one hacks and shoots; the next tap only lets it go
+    case C_ZL:   // a tap (let go within O_ZL_TAP) locks ZL on, so the left thumb is free while the right one hacks and shoots; a longer press is ZL held and let go (no lock);
+                 // while locked, the next touch only lets it go (the player's choice, V7: was a double tap)
         if (_zlLocked) { _zlLocked = NO; [_owner setObject:@(C_ZLOFF) forKey:t]; return; }
-        if (now - _zlUp < O_TAP2) _zlLocked = YES;
+        _zlTouch = t; _zlDown = now;
         [_owner setObject:@(C_ZL) forKey:t]; return;
+    case C_FIRE2: [_owner setObject:@(C_FIRE2) forKey:t]; return;   // ZR alone: it takes no stick, so dragging on it neither aims nor turns the camera (the hub and the aim area do)
     case C_HUB:   // fires; with the right stick free the same finger aims from where it landed (the centre stays: drag to turn while firing)
         [_owner setObject:@(C_HUB) forKey:t];
         if (!_stick[1]) { _stick[1] = t; _stickNow[1] = p; _rCentre = p; _hubAim = t; }
@@ -640,7 +666,7 @@ int front_web_touch(void);
     for (UITouch *t in ts) {
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue;
         if ((v & 0xff) == C_GAME && (v >> 8) < 16) { _game[v >> 8] = nil; game = YES; }
-        if ((v & 0xff) == C_ZL && !_zlLocked) _zlUp = CACurrentMediaTime();   // for the double tap that locks it
+        if (t == _zlTouch) { if (ended && (v & 0xff) == C_ZL && CACurrentMediaTime() - _zlDown < O_ZL_TAP) _zlLocked = YES; _zlTouch = nil; }   // a tap locks ZL on
         if (t == _hubAim) _hubAim = nil;
         if (t == _rsTouch) _rsTouch = nil;
         [_owner removeObjectForKey:t]; [_faceOf removeObjectForKey:t]; for (int i = 0; i < 2; i++) if (t == _stick[i]) _stick[i] = nil;
@@ -652,7 +678,7 @@ int front_web_touch(void);
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
 - (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil;
-    _zlLocked = NO; _hubAim = _rsTouch = nil; [self wake];   // no key stays held: a locked ZL goes too
+    _zlLocked = NO; _hubAim = _rsTouch = _zlTouch = nil; [self wake];   // no key stays held: a locked ZL goes too
     [self pushGame]; [self recompute]; [self armDim]; }
 
 // ---- Shapes ----
@@ -715,14 +741,14 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {   // Orbit: a co
 
 - (CGPoint)keyCentre:(int)b {   // where a key's icon goes, in the layout that is current
     if (b >= B_A && b <= B_Y) return [self facePos:b];
-    if (self.orbit || b == B_OD) return [self oKey:b];
+    if (self.orbit || b >= B_OD) return [self oKey:b];
     if (isDrop(b)) return [self dropCenter:b];
     if (isClick(b)) return [self clickCenter:b];
     CGRect r = [self pillRect:b]; return CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
 }
 - (CGFloat)keyRadius:(int)b {
     if (b >= B_A && b <= B_Y) return self.faceR;
-    if (self.orbit || b == B_OD) return [self oKeyR:b];
+    if (self.orbit || b >= B_OD) return [self oKeyR:b];
     if (isDrop(b)) return [self dropR:b];
     if (isClick(b)) return K_CLICK_R * self.u;
     return [self pillRect:b].size.height / 2;
@@ -737,19 +763,33 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {   // Orbit: a co
         for (int i = 0; i < 6; i++) setPath(_key[ob[i]], circlePath([self oKey:ob[i]], [self oKeyR:ob[i]]));
         setPath(_od, circlePath([self oKey:B_OD], [self oKeyR:B_OD]));
         static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // four arrow tabs pointed at the centre
-        for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, O_ARM_W * u, O_ARM_IN * u, arms[i].angle, 5 * u));
-        CGPoint x = [self facePos:B_X], zl = [self oKey:B_ZL];
-        placeLabel(_hackHint, CGPointMake(x.x, x.y - self.faceR - 9 * u), 7.5 * u); placeLabel(_lockHint, CGPointMake(zl.x, zl.y - [self oKeyR:B_ZL] - 8 * u), 7.5 * u);
-        _hackHint.contentsScale = _lockHint.contentsScale = scale;
+        CGPoint dc = self.dpadCenter; CGFloat dR = self.dpadR;
+        for (int i = 0; i < 4; i++) {   // softer arm corners; in each arm a chevron pointing out, two thirds of the way along it
+            setPath(_key[arms[i].b], armPath(dc, dR, O_ARM_W * u, O_ARM_IN * u, arms[i].angle, 7 * u));
+            CGFloat hw = O_ARM_W * u * O_DPAD_HEAD_W, cs = cos(arms[i].angle), sn = sin(arms[i].angle);   // a solid arrowhead pointing out, as the Ocarina of Time port draws its D-pad
+            CGPoint v[3] = {{0, -O_DPAD_HEAD_OUT * dR}, {hw, -O_DPAD_HEAD_IN * dR}, {-hw, -O_DPAD_HEAD_IN * dR}};
+            CGMutablePathRef cp = CGPathCreateMutable();
+            for (int k = 0; k < 3; k++) { CGPoint q = CGPointMake(dc.x + v[k].x * cs - v[k].y * sn, dc.y + v[k].x * sn + v[k].y * cs); if (k) CGPathAddLineToPoint(cp, NULL, q.x, q.y); else CGPathMoveToPoint(cp, NULL, q.x, q.y); }
+            CGPathCloseSubpath(cp); _dchev[arms[i].b - B_LEFT].path = cp; CGPathRelease(cp);
+            _dchev[arms[i].b - B_LEFT].lineWidth = 0; _dchev[arms[i].b - B_LEFT].strokeColor = nil;
+        }
+        _dpadGuide.path = NULL;   // no circle around it (the player's choice, V23)
+        CGPoint zl = [self oKey:B_ZL];
+        placeLabel(_lockHint, CGPointMake(zl.x, zl.y - [self oKeyR:B_ZL] - 8 * u), 7.5 * u); _lockHint.contentsScale = scale;
+        setPath(_fire2, circlePath([self oKey:B_F2], [self oKeyR:B_F2])); _fire2.lineWidth = 2.4;   // drawn like the hub
         CGFloat k = O_KNOB_R * u; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k); setPath(_knob, circlePath(CGPointMake(k, k), k));
-        CAShapeLayer *in = (CAShapeLayer *)_knob.sublayers.firstObject; CGPathRef ip = circlePath(CGPointMake(k, k), k * O_KNOB_CAP); in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
-        in.fillColor = k_capFill.CGColor; in.strokeColor = nil;   // a solid cap on the knob, not a second ring
+        // the stick as the Ocarina of Time port draws it (V23, the player's choice; V7-V22 had an analog-nub knob): a plain translucent disc with a thin white outline and a soft
+        // shadow, in a faint ring; nothing inside the knob
+        _knobIn.hidden = YES; _knobShade.hidden = YES; _knobLip.hidden = YES;
+        _knob.lineWidth = 1.5; _knob.strokeColor = k_okLine.CGColor;
+        _knob.shadowColor = UIColor.blackColor.CGColor; _knob.shadowOpacity = 0.2f; _knob.shadowRadius = 3; _knob.shadowOffset = CGSizeMake(0, 1);
+        CGPathRef ks = circlePath(CGPointMake(k, k), k); _knob.shadowPath = ks; CGPathRelease(ks);
     }
     _key[B_ZR].lineWidth = o ? 2.4 : 1.5;   // the hub stands out in bright rooms
-    for (int b = 0; b <= B_N; b++) { if (!_icon[b]) continue;
+    for (int b = 0; b <= B_F2; b++) { if (!_icon[b] || (b == B_F2 && !o)) continue;
         CGPoint c = [self keyCentre:b]; CGFloat r = [self keyRadius:b];
-        setPath(_icon[b], iconPath(b, c, r * 0.5)); _icon[b].shadowPath = NULL;
-        CATextLayer *t = b == B_N ? _odLabel : _label[b]; NSString *str = t.string; CGFloat w = (str.length > 1 ? 17 : 13) * u, h = 12 * u;
+        setPath(_icon[b], iconPath(b == B_F2 ? B_ZR : b, c, r * 0.5)); _icon[b].shadowPath = NULL;   // the second fire key: the hub's crosshair
+        CATextLayer *t = b == B_OD ? _odLabel : b == B_F2 ? _fire2Label : _label[b]; NSString *str = t.string; CGFloat w = (str.length > 1 ? 17 : 13) * u, h = 12 * u;
         CGPoint tc = CGPointMake(c.x + 0.7 * r, c.y + 0.7 * r);
         setPath(_tag[b], CGPathCreateWithRoundedRect(CGRectMake(tc.x - w / 2, tc.y - h / 2, w, h), h / 2, h / 2, NULL)); _tag[b].shadowPath = NULL;
         placeLabel(t, tc, 9.5 * u); if (t.contentsScale != scale) { t.contentsScale = scale; [t setNeedsDisplay]; }
@@ -788,7 +828,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {   // Orbit: a co
     setPath(_ring, circlePath(self.stickHome, [self stickR:0]));
     CGFloat k = K_KNOB_R * u; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
     setPath(_knob, circlePath(CGPointMake(k, k), k));
-    CAShapeLayer *in = (CAShapeLayer *)_knob.sublayers.firstObject; CGPathRef ip = circlePath(CGPointMake(k, k), k * 0.62);
+    CAShapeLayer *in = _knobIn; CGPathRef ip = circlePath(CGPointMake(k, k), k * 0.62);   // not the knob's first sublayer: Orbit's shade layer (a gradient, no path) comes first
     in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
     if (DM_GAME_TOUCH_STYLE) [self orbitLayout:self.ou];   // its keys' unit
     [CATransaction commit];
@@ -796,27 +836,27 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {   // Orbit: a co
 }
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
 // Orbit's pressed look and modes (in refresh's transaction): a pressed key gets the white glow, its outline and icon full white; hacking mode (ZL held or locked) swaps the face
-// keys' icons for cursor arrows and shows HACKING above X; a locked ZL stays lit and shows LOCKED; the floating stick's ring follows its centre. Nothing marks the aim area
+// keys' icons for cursor arrows (no HACKING text) and shows the second fire key; a locked ZL stays lit and shows LOCKED; the floating stick's ring follows its centre. Nothing marks the aim area
 // or where a held aim is centred: the right stick is not drawn, as in the classic layout
 - (void)orbitRefresh:(uint64_t)all {
-    BOOL o = self.orbit, od = NO, hack0 = o && ((all >> B_ZL) & 1);   // hacking mode: the face keys' outlines in the accent
-    for (UITouch *t in _owner) { uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; if ((v & 0xff) == C_BTN && (v >> 8) == B_OD) od = YES; }
-    for (int b = 0; b <= B_N; b++) { CAShapeLayer *k = b == B_N ? _od : _key[b]; BOOL on = b == B_N ? od : (all >> b) & 1;
-        if (b == B_N) k.fillColor = (on ? k_on : k_idle).CGColor;
-        k.strokeColor = (on ? k_onLine : hack0 && b >= B_A && b <= B_Y ? k_accent : k_line).CGColor; k.shadowOpacity = on ? 0.7f : 0; k.shadowRadius = 8; k.shadowOffset = CGSizeZero;
+    BOOL o = self.orbit, od = NO, f2 = NO, hack0 = o && ((all >> B_ZL) & 1);   // hacking mode: the face keys' outlines in the accent
+    for (UITouch *t in _owner) { uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; if ((v & 0xff) == C_BTN && (v >> 8) == B_OD) od = YES; if ((v & 0xff) == C_FIRE2) f2 = YES; }
+    _fire2.hidden = !hack0 && !f2;   // shown while ZL is on (held or locked); a finger still on it keeps it until let go
+    for (int b = 0; b <= B_F2; b++) { CAShapeLayer *k = b == B_OD ? _od : b == B_F2 ? _fire2 : _key[b]; BOOL on = b == B_OD ? od : b == B_F2 ? f2 : (all >> b) & 1;
+        if (b >= B_OD) k.fillColor = (on ? k_on : k_idle).CGColor;
+        k.strokeColor = (on ? k_onLine : hack0 && b >= B_A && b <= B_Y ? k_accent : k_line).CGColor; k.shadowOpacity = on ? 0.35f : 0; k.shadowRadius = 6; k.shadowOffset = CGSizeZero;   // a faint glow
         if (_icon[b]) _icon[b].strokeColor = (on ? k_onLine : k_text).CGColor;
         if (_tag[b]) _tag[b].strokeColor = k_line.CGColor; }
-    _odLabel.foregroundColor = (od ? k_textOn : k_text).CGColor;
-    BOOL hack = o && ((all >> B_ZL) & 1);
-    for (int i = 0; i < 4; i++) { _arrow[i].hidden = !hack; _icon[B_A + i].hidden = hack; _arrow[i].strokeColor = (((all >> (B_A + i)) & 1) ? k_onLine : k_text).CGColor; }
-    _hackHint.hidden = !hack; _lockHint.hidden = !(o && _zlLocked);
-    _runHint.hidden = YES;
-    if (o) {   // the floating stick: its ring follows its centre; running (past O_RUN times the rim, LS) brightens the ring and shows RUN above it
-        CGPoint c = [self stickCentre:0]; CGFloat R = [self stickR:0], uo = self.ou;
+    _odLabel.foregroundColor = (od ? k_textOn : k_text).CGColor; _fire2Label.foregroundColor = (f2 ? k_textOn : k_text).CGColor;
+    for (int i = 0; i < 4; i++) { _dchev[i].strokeColor = nil; _dchev[i].fillColor = (((all >> (B_LEFT + i)) & 1) ? k_onLine : k_text).CGColor; }   // a pressed D-pad arm's arrowhead in full white
+    for (int i = 0; i < 4; i++) { _arrow[i].hidden = !hack0; _icon[B_A + i].hidden = hack0; _arrow[i].strokeColor = (((all >> (B_A + i)) & 1) ? k_onLine : k_text).CGColor; }
+    _lockHint.hidden = !(o && _zlLocked);
+    if (o) {   // the floating stick, two plain circles: its ring follows its centre; running (past O_RUN times the rim, LS) only tints the ring near-white (no text, no marks)
+        CGPoint c = [self stickCentre:0]; CGFloat R = [self stickR:0];
         BOOL run = _stick[0] && dist(_stickNow[0], c) > R * O_RUN;
         CGPathRef r = circlePath(c, R); _ring.path = r; _ring.shadowPath = r; CGPathRelease(r);
-        _ring.lineWidth = run ? 2.4 : 1.5; _ring.strokeColor = (run ? k_accent : k_line).CGColor; _ring.shadowOpacity = run ? 0.7f : 0; _ring.shadowRadius = 8; _ring.shadowOffset = CGSizeZero;
-        if (run) { placeLabel(_runHint, CGPointMake(c.x, c.y - R - 8 * uo), 7.5 * uo); _runHint.contentsScale = MAX(self.traitCollection.displayScale, 1); _runHint.hidden = NO; }
+        _ring.lineWidth = 1.5; _ring.fillColor = k_okRing.CGColor; _ring.strokeColor = (run ? k_accent : k_okLine).CGColor;   // the Ocarina of Time port's ring (V23): faint fill, thin outline, soft shadow
+        _ring.shadowColor = UIColor.blackColor.CGColor; _ring.shadowOpacity = 0.2f; _ring.shadowRadius = 3; _ring.shadowOffset = CGSizeMake(0, 1);
     }
 }
 - (void)refresh {   // pressed state → fill, sticks → knob position
@@ -826,6 +866,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {   // Orbit: a co
         _key[b].fillColor = (on ? k_on : k_idle).CGColor; _label[b].foregroundColor = (on ? k_textOn : k_text).CGColor; }
     CGPoint h = [self stickCentre:0], o = [self knobOffset:0];
     _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? k_on : k_idle).CGColor;
+    if (self.orbit && k_okKnob) _knob.fillColor = (_stick[0] ? k_okKnobOn : k_okKnob).CGColor;   // Orbit: the Ocarina of Time port's knob (V23)
     if (DM_GAME_TOUCH_STYLE) [self orbitRefresh:all];
     [CATransaction commit];
 }

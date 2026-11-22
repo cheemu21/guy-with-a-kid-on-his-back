@@ -166,6 +166,12 @@ int main(void) { @autoreleasepool {
         n = census_run("t_rt_recycle", &named, &queued);
         CHECK(n >= 4 && queued == 0, "once their submissions complete, nothing is left for the queue");
     }
+    {   // a large target: an eighth more would be 6 MB nothing uses (RH_SLACK, from upstream PR #2566)
+        tex_t big = target(&pool, 95020, 0, 3072, 2048); mtl_tex_init(&big);
+        id<MTLTexture> tbig = tex_mtl(&big); MTLSizeAndAlign nb = [g_dev heapTextureSizeAndAlignWithDescriptor:tex_desc(&big, 0)];
+        CHECK(tbig && tbig.heap && tbig.heap.size >= nb.size && tbig.heap.size <= nb.size + RH_SLACK + 65536, "a large target's new heap is at most RH_SLACK larger than it");
+        tbig = nil; mtl_tex_release(&big); mtl_alias_drop_pool(&pool); settle();
+    }
     mtl_sub_commit(); mtl_drain(); free(mem);
     printf("t_rt_recycle: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

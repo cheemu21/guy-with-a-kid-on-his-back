@@ -513,6 +513,7 @@ uint32_t own_pool_finalize_locked(const void *pool, CFSetRef also) {
     if (n) own_epoch();   // no note for the sharing table: the IDs of the pool's textures are many, and its finalize marks them gone besides (each serial entry that went has its note)
     return n;
 }
+uint32_t g_own_idle_any;
 own_dead_stats own_alias_dead_locked(uint32_t now, uint32_t idle, own_use_fn use_of, uint32_t max, uint64_t **serials, uint32_t *nserials) {
     own_dead_stats st = {0}; *serials = NULL; *nserials = 0;
     if (!g_alias.n) return st;
@@ -536,8 +537,10 @@ own_dead_stats own_alias_dead_locked(uint32_t now, uint32_t idle, own_use_fn use
                 over = x && x != val && use_of((__bridge id)x, &xu) && xu.wr > u.use;
             }
         }
-        if (!over) continue;
+        int idle_only = !over && g_own_idle_any && now - u.use >= g_own_idle_any;
+        if (!over && !idle_only) continue;
         if (CFSetContainsValue(pinned, val)) { st.pinned++; continue; }
+        if (idle_only) { st.idle_n++; if ([(__bridge id)val respondsToSelector:@selector(allocatedSize)]) st.idle_bytes += ((__bridge id<MTLTexture>)val).allocatedSize; }
         if (nv == cap) { cap = cap ? cap * 2 : 64; alias_key *n = realloc(vk, cap * sizeof *vk); if (!n) ODIE("the released shared textures"); vk = n; }
         vk[nv++] = *k; CFSetAddValue(dead, val);
     }

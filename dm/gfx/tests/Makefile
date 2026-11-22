@@ -226,6 +226,12 @@ check_t_capture: t_capture
 # On the GPU: two synthetic frames through the capture hooks, the second one captured, then replayed by nvn_replay (same digest, twice)
 t_large_mdi: t_large_mdi.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_large_mdi.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+t_code_pool: t_code_pool.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_code_pool.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_code_pool
+check_t_code_pool: t_code_pool
+	./t_code_pool
+	./t_code_pool raw
 t_mdx_prescan: t_mdx_prescan.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_mdx_prescan.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 t_capture_live: t_capture_live.m $(MTL_T_DEP)
@@ -261,6 +267,8 @@ check_t_tex_fit_root: t_tex_fit_root
 	MTL_DEBUG_LAYER=1 ./t_tex_fit_root
 t_addr_known: t_addr_known.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_addr_known.m $(MTL_T_SRC) $(FW)
+t_file_wire: t_file_wire.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_file_wire.m $(MTL_T_SRC) $(FW)
 t_pool_chunks: t_pool_chunks.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_chunks.m $(MTL_T_SRC) $(FW)
 t_pool_grow: t_pool_grow.m $(MTL_T_DEP)
@@ -391,6 +399,14 @@ check_t_cpu_storage: RUN_ENV = MTL_DEBUG_LAYER=1
 t_initial_uncached: t_initial_uncached.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_initial_uncached.m $(MTL_T_SRC) $(FW)
 check_t_initial_uncached: RUN_ENV = MTL_DEBUG_LAYER=1
+t_upload_idle: t_upload_idle.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_idle.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_upload_idle
+check_t_upload_idle: t_upload_idle
+	env -u DM_NVN_UPLOAD_IDLE_MS DM_NVN_UPLOAD_REUSE=1 MTL_DEBUG_LAYER=1 ./t_upload_idle
+	DM_NVN_UPLOAD_IDLE_MS=0 DM_NVN_UPLOAD_REUSE=1 MTL_DEBUG_LAYER=1 ./t_upload_idle
+	DM_NVN_UPLOAD_IDLE_MS=2000 DM_NVN_UPLOAD_REUSE=1 DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_upload_idle
+	DM_NVN_UPLOAD_IDLE_MS=2000 DM_NVN_UPLOAD_REUSE=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_upload_idle
 t_upload_slots: t_upload_slots.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_slots.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_upload_slots
@@ -608,9 +624,38 @@ check_t_lazy_clear_order: RUN_ENV = MTL_DEBUG_LAYER=1
 t_zero_depth: t_zero_depth.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_zero_depth.m $(MTL_T_SRC) $(FW)
 check_t_zero_depth: RUN_ENV = MTL_DEBUG_LAYER=1
+t_zero_colour: t_zero_colour.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_zero_colour.m $(MTL_T_SRC) $(FW)
+check_t_zero_colour: RUN_ENV = MTL_DEBUG_LAYER=1
 t_clear_layers: t_clear_layers.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_clear_layers.m $(MTL_T_SRC) $(FW)
 check_t_clear_layers: RUN_ENV = MTL_DEBUG_LAYER=1
+t_framegen: t_framegen.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_framegen
+check_t_framegen: t_framegen
+	MTL_DEBUG_LAYER=1 ./t_framegen
+	MTL_DEBUG_LAYER=1 ./t_framegen cap
+t_sp_src_cache: t_sp_src_cache.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_sp_src_cache.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_sp_src_cache
+check_t_sp_src_cache: t_sp_src_cache
+	MTL_DEBUG_LAYER=1 ./t_sp_src_cache
+	MTL_DEBUG_LAYER=1 ./t_sp_src_cache off
+t_big_shed: t_big_shed.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_big_shed.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_big_shed
+check_t_big_shed: t_big_shed
+	MTL_DEBUG_LAYER=1 ./t_big_shed
+	MTL_DEBUG_LAYER=1 ./t_big_shed off
+t_big_grow: t_big_grow.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_big_grow.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_big_grow
+check_t_big_grow: t_big_grow
+	MTL_DEBUG_LAYER=1 ./t_big_grow
+t_clear_slices: t_clear_slices.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_clear_slices.m $(MTL_T_SRC) $(FW)
+check_t_clear_slices: RUN_ENV = MTL_DEBUG_LAYER=1
 t_clear_tex: t_clear_tex.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_clear_tex.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_clear_tex
@@ -623,6 +668,9 @@ check_t_attachment_capacity: t_attachment_capacity
 	@for compiler in 0 1; do for enc in 0 1; do \
 	    DM_PSO_MTL4=$$compiler DM_NVN_ENC_THREAD=$$enc MTL_DEBUG_LAYER=1 ./t_attachment_capacity || exit $$?; \
 	done; done
+t_dispatch_image_range: t_dispatch_image_range.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_dispatch_image_range.m $(MTL_T_SRC) $(FW)
+check_t_dispatch_image_range: RUN_ENV = MTL_DEBUG_LAYER=1
 t_dispatch_clamp: t_dispatch_clamp.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_dispatch_clamp.m $(MTL_T_SRC) $(FW)
 check_t_dispatch_clamp: RUN_ENV = MTL_DEBUG_LAYER=1
@@ -658,6 +706,12 @@ t_image_alias: t_image_alias.m $(MTL_T_DEP)
 check_t_image_alias: t_image_alias
 	DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_image_alias
 	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_image_alias
+t_res_census: t_res_census.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_res_census.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_res_census
+check_t_res_census: t_res_census
+	MTL_DEBUG_LAYER=1 ./t_res_census
+	MTL_DEBUG_LAYER=1 ./t_res_census off
 t_rt_recycle: t_rt_recycle.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_recycle.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_rt_recycle

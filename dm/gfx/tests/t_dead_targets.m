@@ -82,6 +82,16 @@ int main(void) { @autoreleasepool {
         CHECK(ms < 20, "a pass stays short");
         for (int k = 0; k < 2 * N; k++) mtl_tex_release(&ts[k]);
     }
+    {   // DM_NVN_RT_IDLE_S (60 s by default): a target nothing drew over goes once unused that long (PRAGMATA, V18: 604 MB held by the sharing table alone)
+        uint64_t idle0 = g_tu_idle_n;
+        CHECK(shared(tc), "before: the target nothing overlaps is still there");
+        pass(160 + 590);   // 59 s after its last use (its ID's binding at 160)
+        CHECK(shared(tc), "unused for 59 s: it stays");
+        pass(160 + 610);
+        CHECK(!shared(tc) && g_tu_idle_n > idle0 && g_tu_idle_bytes > 0, "unused for 61 s: it goes, counted as gone for idleness alone");
+        id<MTLTexture> tc2 = tex_mtl(&c);
+        CHECK(tc2 && tc2 != tc && shared(tc2), "its next use makes it again");
+    }
     mtl_tex_release(&a); mtl_tex_release(&b); mtl_tex_release(&c); mtl_tex_release(&d); mtl_tex_release(&e); mtl_tex_release(&f); mtl_tex_release(&g); mtl_tex_release(&h); mtl_tex_release(&i);
     mtl_sub_commit(); mtl_drain(); CHECK(!mtl_last_commit_error(), "no GPU error");
     printf("t_dead_targets: %d checks, %d failed\n", checks, failed); return failed != 0;
