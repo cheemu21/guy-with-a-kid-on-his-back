@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>PRAGMATA (Nintendo Switch 2), running natively on an iPhone</b><br>
-  a port by <a href="https://github.com/cheemu21">cheemu21</a>, built on <a href="https://github.com/seedds">seedds</a>' <a href="https://github.com/seedds/nxnative">nxnative</a>
+  a two-person port by <a href="https://github.com/cheemu21">cheemu21</a> and <a href="https://github.com/huzaifahshahid71-ops">huzaifahshahid71-ops</a>, built on <a href="https://github.com/seedds">seedds</a>' <a href="https://github.com/seedds/nxnative">nxnative</a>
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
   <a href="#credits">Credits</a>
 </p>
 
-Hi! This is my attempt to get PRAGMATA, Hugh and Diana's trip across the Moon, running on an iPhone as a real app. It isn't an emulator: the game's own code runs directly on the Apple chip, and its graphics are rebuilt on Apple's Metal 4. The name is the game in one line: a guy with a kid on his back.
+Hi! This is our attempt to get PRAGMATA, Hugh and Diana's trip across the Moon, running on an iPhone as a real app. [huzaifahshahid71-ops](https://github.com/huzaifahshahid71-ops) started it with the [PRAGMATA iOS investigation](https://github.com/huzaifahshahid71-ops/pragmata-ios-investigation); [cheemu21](https://github.com/cheemu21) carried it from there through V1–V25. It isn't an emulator: the game's own code runs directly on the Apple chip, and its graphics are rebuilt on Apple's Metal 4. The name is the game in one line: a guy with a kid on his back.
 
 > [!NOTE]
 > **Nothing from the game is in this repository.** You build the app yourself from your own copy of PRAGMATA. This project is not affiliated with the game's creators or with Nintendo.
@@ -46,15 +46,15 @@ Hi! This is my attempt to get PRAGMATA, Hugh and Diana's trip across the Moon, r
 
 ## Where it stands
 
-Measured on my **iPhone 18 Pro** (A20 Pro), iOS 27.2:
+Measured on cheemu21's **iPhone 18 Pro** (A20 Pro), iOS 27.2:
 
 - **Title screen and menus:** 60 fps.
 - **Gameplay:** 30 fps with frame generation on, so 60 fps on screen; frame times steady at 33 ms.
-- **Longest runs:** 6–7 minutes of play with no GPU error (V20, V22), each ended by me leaving the app.
+- **Longest runs:** 6–7 minutes of play with no GPU error (V20, V22), each ended by leaving the app.
 - **GPU memory in play:** 5.7–6.6 GB resident before the texture saver (V22), inside the 18 Pro's 8 GB budget.
 - **GPU time:** about 25 ms a frame in play plus 3.5 ms for frame generation, of a 33 ms budget.
 
-**Where I'm headed:** 8 GB devices (iPhone 15 Pro class). Their GPU budget is about 5.4 GB and their GPU is slower, so the plan is the lowest memory and the least work per frame the game will take. V24 and V25 are the first steps.
+**Where we're headed:** 8 GB devices (iPhone 15 Pro class). Their GPU budget is about 5.4 GB and their GPU is slower, so the plan is the lowest memory and the least work per frame the game will take. V24 and V25 are the first steps.
 
 ## The road so far (V1–V25)
 
@@ -163,7 +163,7 @@ Later builds reuse the extracted game files and the compiled shaders, and take a
 
 - **[huzaifahshahid71-ops](https://github.com/huzaifahshahid71-ops)** — the [PRAGMATA iOS investigation](https://github.com/huzaifahshahid71-ops/pragmata-ios-investigation) this port started from: the pinned nxnative changes, diagnostic tools and investigation notes it was handed over as.
 - **[seedds/nxnative](https://github.com/seedds/nxnative)** and its contributors — the native runtime, the Metal 4 graphics and upstream's PRAGMATA support this is built on. Upstream fixes ported here include work by [stan69b](https://github.com/stan69b) (guest-file wiring, shader-code pools, render-target heap slack, from PRs #1971 and #2566), [oliverames](https://github.com/oliverames) and kencalx's [NX18](https://github.com/kencalx/NX18) (the residency commit worker, PR #2868), [eibrunocorrea](https://github.com/eibrunocorrea) (indirect-draw masks, PR #2945), [aksmith-git](https://github.com/aksmith-git) (idle upload staging, PR #1491) and the texture memory saver (PR #1418).
-- **[Kid with Sword Remake](https://github.com/cheemu21/kid-with-sword-remake)** (my Ocarina of Time port) — frame generation and the touch stick's design.
+- **[Kid with Sword Remake](https://github.com/cheemu21/kid-with-sword-remake)** (cheemu21's Ocarina of Time port) — frame generation and the touch stick's design.
 - The crayon drawing at the top and the launcher's Earth-over-the-Moon picture are fan art.
 
 Upstream source and its modifications keep the upstream MIT notice in [LICENSE](LICENSE). nxnative's own documentation (other games, the Mac app, developer notes) is in [docs](docs) and [dm/games](dm/games/README.md).
