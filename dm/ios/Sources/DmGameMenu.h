@@ -10,6 +10,9 @@ void *dm_game_menu(void);   // GameMenu.swift: a retained UIMenu, rebuilt each t
 int dm_pad_layout(void);   // DmGamepad.m: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
 bool dm_pad_layout_offered(int layout);   // Tap only in handheld mode
 void dm_pad_layout_set(int layout);   // releases every touch first, and is saved for the next start
+int dm_pad_layout_saved(void);   // the launcher: the layout the next start takes (saved, else the profile's)
+void dm_pad_layout_store(int layout);   // the launcher: lays it out and saves it as picked
+int dm_touch_style(void);   // DM_GAME_TOUCH_STYLE: 1 = Orbit
 void dm_gamepad_touch_feedback(bool on);   // DM_TOUCH_HAPTICS
 bool dm_setting_live(const char *env, const char *value);   // front_ios.m: value NULL asks whether the running game takes env at once; otherwise applies it
 #ifdef __cplusplus

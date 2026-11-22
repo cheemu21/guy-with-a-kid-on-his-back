@@ -1,6 +1,6 @@
 // Launcher: the settings screen shown before the game starts (front_ios.m dm_show_launcher). Its settings come from the app's dm/launcher.json (an app of several programs: dm/p<N>/launcher.json), which build_ipa.sh writes for this game
 // from dm/games/settings.tsv (dm/games/settings.py): each sets an environment variable the host reads when the game starts. A variable an env file set (Documents/env.txt, the bundle's
-// dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section (rows: LauncherRow.swift). Choices that differ from the game's default are kept
+// dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. The screen is a board of six nodes and All settings, every setting as a card (LauncherBoard.swift). Choices that differ from the game's default are kept
 // in UserDefaults; Reset to tested defaults shows the defaults, and Play then forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once with the saved choices; DM_SAVED_CHOICES=0 ignores them (and keeps them)
 import SwiftUI
 import UIKit
@@ -100,54 +100,38 @@ private struct LauncherView: View {
     @State private var check = 0   // which Play the running check is for: one the player went on from without it is dropped
     @State private var report: SaveSyncReport?
     @State private var asking: SaveSyncReport.Step?
+    @State private var selected = "saver"   // the node the readout describes
+    @State private var allOpen = false
+    @State private var cloudOpen = false
+    @State private var padSaved = Int(dm_pad_layout_saved())   // the touch layout the next start takes (DmGamepad.m)
+
+    private static let cols: [CGFloat] = [122, 234], rowsY: [CGFloat] = [122, 210, 298]   // the nodes' centres on the board, two columns of three
+    private var nodes: [BoardNode] { BoardNode.all.filter { $0.env == nil || m.setting($0.env) != nil } }
+    private var handheld: Bool { (m.values["DM_OPMODE"] ?? "1") == "0" }
+    private var padNow: Int { padSaved == 2 && !handheld ? 0 : max(0, min(padSaved, 2)) }
+    private var gameName: String { ((info("CFBundleDisplayName") as? String) ?? "Game").uppercased() }
 
     var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 0) {
-                VStack(spacing: 16) {
-                    if let icon = appIcon() {
-                        Image(uiImage: icon).resizable().frame(width: 96, height: 96)
-                            .clipShape(RoundedRectangle(cornerRadius: 22))
-                            .accessibilityHidden(true)
-                    }
-                    Text((info("CFBundleDisplayName") as? String) ?? "Game")
-                        .font(.title.weight(.bold)).multilineTextAlignment(.center)
-                    Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
-                        .font(.callout).foregroundStyle(.secondary)
-                    playButton
-                }
-                .padding(16)
-                .frame(width: geometry.size.width / 3, height: geometry.size.height)
-                List {
-                    ForEach(m.sections, id: \.self) { section in
-                        let rows = m.rows(in: section)
-                        if !rows.isEmpty {
-                            Section(section) {
-                                ForEach(rows) { SettingRow(s: $0, m: m) }
-                            }
-                        }
-                    }
-                    Section {
-                        Button("Reset to tested defaults") { m.reset() }
-                            .disabled(!m.changed)
-                    } footer: {
-                        Text("Brings back all settings this game was tested with.")
-                    }
-                    CloudSavesSection()
-                    Section {
-                        HStack {
-                            Text("Memory available")
-                            Spacer()
-                            Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .listStyle(.insetGrouped)
-                .contentMargins(.horizontal, 12, for: .scrollContent)
-                .frame(width: geometry.size.width * 2 / 3)
+        GeometryReader { g in
+            let k = min(g.size.width / Board.size.width, g.size.height / Board.size.height)
+            ZStack {
+                LauncherBackdrop()
+                board.frame(width: Board.size.width, height: Board.size.height).scaleEffect(k).frame(width: g.size.width, height: g.size.height)
+                if allOpen { allSettings.transition(.opacity) }
             }
         }
+        .ignoresSafeArea()
         .preferredColorScheme(.dark)
+        .statusBarHidden()
+        .animation(.easeOut(duration: 0.18), value: allOpen)
+        .sheet(isPresented: $cloudOpen) {
+            NavigationStack {
+                List { CloudSavesSection() }
+                    .navigationTitle("Cloud saves").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { cloudOpen = false } } }
+            }
+            .preferredColorScheme(.dark)
+        }
         .confirmationDialog(SaveSyncReport.chooseTitle, isPresented: isAsking(.choose), titleVisibility: .visible, presenting: report) { r in
             Button(r.localLabel(here: "iPhone")) { go(r.localChoice) }
             Button(r.cloudLabel) { go(r.cloudChoice) }
@@ -166,17 +150,154 @@ private struct LauncherView: View {
         }
     }
 
-    @ViewBuilder var playButton: some View {
-        let button = Button(action: start) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large).disabled(checking)
-        if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
-        if checking {
-            VStack(spacing: 6) {
-                HStack(spacing: 6) { ProgressView(); Text("Checking the cloud save…").font(.callout).foregroundStyle(.secondary) }
-                Button("Play Without It") { checking = false; go("offline") }.font(.callout)
+    // ---- The board (874 x 402 points, scaled to the screen) ----
+    private var board: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            VStack(alignment: .leading, spacing: 4) {
+                Text(gameName).font(Board.title(38)).tracking(12).foregroundStyle(Color(red: 246 / 255, green: 251 / 255, blue: 1))
+                    .shadow(color: .black.opacity(0.7), radius: 7, y: 2).lineLimit(1).minimumScaleFactor(0.5)
+                HStack(spacing: 8) {
+                    Rectangle().fill(Board.mint).frame(width: 5, height: 5).rotationEffect(.degrees(45))
+                    Rectangle().fill(LinearGradient(colors: [Board.mint.opacity(0.8), .clear], startPoint: .leading, endPoint: .trailing)).frame(width: 150, height: 1)
+                }
+                .accessibilityHidden(true)
+            }
+            .frame(width: 520, alignment: .leading)
+            .offset(x: 62, y: 12)
+
+            chips.frame(width: Board.size.width - 124, height: 30, alignment: .trailing).offset(x: 62, y: 12)
+
+            ZStack(alignment: .topLeading) {
+                Chamfer().fill(Board.panel.opacity(0.62))
+                BoardGrid().clipShape(Chamfer())
+                Chamfer().stroke(Board.mint.opacity(0.25), lineWidth: 1)
+                Text("// ROUTE CONFIG").font(Board.mono(9)).tracking(1.5).foregroundStyle(Board.mint).offset(x: 12, y: 8)
+            }
+            .frame(width: 230, height: 300).offset(x: 62, y: 70)
+
+            ForEach(Array(nodes.prefix(6).enumerated()), id: \.element.id) { i, n in
+                node(n).offset(x: Self.cols[i % 2] - 50, y: Self.rowsY[i / 2] - 23)
+            }
+
+            readout.frame(width: Board.size.width - 62 - 650, height: 124).offset(x: 650, y: 66)
+
+            Text(checking ? "SYNCING" : "PLAY").font(Board.title(18)).tracking(6).foregroundStyle(Board.white)
+                .shadow(color: .black.opacity(0.8), radius: 3, y: 1)
+                .frame(width: 140).offset(x: 672, y: 218).accessibilityHidden(true)
+            PlayDiamond(busy: checking, tap: start).offset(x: 686, y: 262)
+            if checking {
+                Button { checking = false; go("offline") } label: {
+                    Text("PLAY WITHOUT IT").font(Board.mono(10, .bold)).tracking(1).foregroundStyle(Board.white)
+                        .padding(.horizontal, 10).frame(height: 30).background(Board.panel.opacity(0.55), ignoresSafeAreaEdges: [])
+                        .overlay(Rectangle().strokeBorder(Board.white.opacity(0.4), lineWidth: 1))
+                }
+                .buttonStyle(.plain).offset(x: 530, y: 303)
             }
         }
     }
 
+    private var chips: some View {
+        HStack(spacing: 10) {
+            Text("● LINK").foregroundStyle(Board.mint)
+            if let s = m.setting("DM_OPMODE") { Text(m.shown(s)) }
+            if let s = m.setting("DM_FPS_TARGET") {
+                let fg = m.setting("DM_FRAMEGEN").map { m.lit($0) } ?? false
+                Text(m.shown(s) + (fg ? " → 60" : ""))
+            }
+            if memory > 0 {
+                Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory).uppercased() + " FREE")
+                    .monospacedDigit().foregroundStyle(memory > 3 << 30 ? Board.dim : Board.amber)
+            }
+            Button { allOpen = true } label: {
+                Text("ALL SETTINGS").font(Board.mono(10, .bold)).tracking(1).foregroundStyle(Color(red: 232 / 255, green: 241 / 255, blue: 250 / 255))
+                    .padding(.horizontal, 12).frame(height: 30).background(Board.panel.opacity(0.55), ignoresSafeAreaEdges: [])
+                    .overlay(Rectangle().strokeBorder(Board.white.opacity(0.4), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+        }
+        .font(Board.mono(10)).foregroundStyle(Board.dim).lineLimit(1)
+    }
+
+    @ViewBuilder private func node(_ n: BoardNode) -> some View {
+        if let s = m.setting(n.env) {
+            NodeView(title: n.title, value: m.shown(s), icon: n.icon, lit: m.lit(s), selected: selected == n.id, locked: m.locked(s)) {
+                m.step(s); selected = n.id; tick()
+            }
+        } else {
+            NodeView(title: n.title, value: PadLayout.names()[padNow].uppercased(), icon: n.icon, lit: true, selected: selected == n.id, locked: false) {
+                let l = PadLayout.next(handheld: handheld); dm_pad_layout_store(Int32(l)); padSaved = l; selected = n.id; tick()
+            }
+        }
+    }
+
+    private func tick() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+
+    private var readout: some View {
+        let n = nodes.first { $0.id == selected } ?? nodes.first
+        let s = m.setting(n?.env)
+        let value = s.map { m.shown($0) } ?? PadLayout.names()[padNow].uppercased()
+        var note = s == nil ? PadLayout.note : (n?.fallbackNote.isEmpty == false ? n!.fallbackNote : s!.note)
+        if let s, m.locked(s) { note += " · " + m.lockNote(s) }
+        return HStack(alignment: .top, spacing: 10) {
+            Rectangle().fill(Board.mint).frame(width: 3)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("// NODE · \(n?.code ?? "")").font(Board.mono(9)).tracking(1.5).foregroundStyle(Board.mint)
+                Text("\((n?.title ?? "").uppercased()) — \(value)").font(Board.title(14)).tracking(0.8).foregroundStyle(Board.white).lineLimit(2).minimumScaleFactor(0.8)
+                Text(note).font(.system(size: 10.5)).foregroundStyle(Color(red: 195 / 255, green: 210 / 255, blue: 224 / 255)).lineSpacing(1).minimumScaleFactor(0.75)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(EdgeInsets(top: 12, leading: 12, bottom: 10, trailing: 12))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Chamfer().fill(Board.panel.opacity(0.78)))
+        .overlay(Chamfer().stroke(Board.white.opacity(0.18), lineWidth: 1))
+        .accessibilityElement(children: .combine)
+    }
+
+    // ---- All settings: every launcher setting as a card, with the touch layout, Reset, cloud saves and the memory ----
+    private var allSettings: some View {
+        ZStack(alignment: .top) {
+            Color(red: 4 / 255, green: 9 / 255, blue: 15 / 255).opacity(0.94).ignoresSafeArea()
+            BoardGrid(opacity: 0.05).ignoresSafeArea()
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("// SYSTEM CONFIG").font(Board.mono(10)).foregroundStyle(Board.mint)
+                        Text("ALL SETTINGS").font(Board.title(22)).tracking(3).foregroundStyle(Board.white)
+                    }
+                    Spacer()
+                    Button { allOpen = false } label: {
+                        Text("DONE").font(Board.mono(10, .bold)).tracking(1).foregroundStyle(Color(red: 3 / 255, green: 16 / 255, blue: 21 / 255))
+                            .padding(.horizontal, 16).frame(height: 34).background(Board.mint, ignoresSafeAreaEdges: [])
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(EdgeInsets(top: 20, leading: 62, bottom: 10, trailing: 62))
+                ScrollView {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 3), spacing: 10) {
+                        ForEach(m.sections, id: \.self) { section in
+                            ForEach(m.rows(in: section)) { SettingCard(s: $0, m: m) }
+                        }
+                        ActionCard(group: "CONTROLS", title: "Touch layout", note: PadLayout.note, value: PadLayout.names()[padNow].uppercased(), on: true) {
+                            let l = PadLayout.next(handheld: handheld); dm_pad_layout_store(Int32(l)); padSaved = l
+                        }
+                        ActionCard(group: "SAVES", title: "Cloud saves", note: "An iCloud Drive folder shared with the Mac app.", value: cloudFolder(), on: !cloudFolder().isEmpty) { cloudOpen = true }
+                        ActionCard(group: "SYSTEM", title: "Memory available", note: "What iOS lets the game use now.",
+                                   value: ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory), on: false, tap: nil)
+                        ActionCard(group: "SYSTEM", title: "Reset to tested defaults", note: "Brings back all settings this game was tested with.", value: "", on: false,
+                                   disabled: !m.changed) { m.reset() }
+                    }
+                    .padding(EdgeInsets(top: 4, leading: 62, bottom: 20, trailing: 62))
+                }
+            }
+        }
+    }
+
+    private func cloudFolder() -> String {
+        var stale: ObjCBool = false
+        return (dm_cloud_saves_path(&stale) ?? "").split(separator: "/").last.map(String.init) ?? ""
+    }
     private func isAsking(_ step: SaveSyncReport.Step) -> Binding<Bool> {
         Binding(get: { asking == step }, set: { if !$0 && asking == step { asking = nil } })
     }
@@ -220,12 +341,6 @@ private struct LauncherView: View {
         play()
     }
 
-    private func appIcon() -> UIImage? {
-        if let i = UIImage(named: "AppIcon") { return i }
-        guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-              let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
-        return UIImage(named: last)
-    }
 }
 
 // Shows the launcher over the root view controller and calls done once the settings are in the environment; false (done is not called) when there is no launcher

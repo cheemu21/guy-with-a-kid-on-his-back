@@ -1,62 +1,93 @@
+<p align="center">
+  <img src="docs/images/guy-with-a-kid.jpg" width="300" alt="A crayon drawing: a smiling blonde girl in a blue suit waving from the back of a grey and orange armoured suit, under a smiling sun">
+</p>
+
 <h1 align="center">Guy with a Kid on His Back</h1>
 
 <p align="center">
-  <b>PRAGMATA (Nintendo Switch 2) as a native iPhone app</b><br>
-  built on <a href="https://github.com/seedds/nxnative">nxnative</a>
+  <b>PRAGMATA (Nintendo Switch 2), running natively on an iPhone</b><br>
+  a port by <a href="https://github.com/cheemu21">cheemu21</a>, built on <a href="https://github.com/seedds">seedds</a>' <a href="https://github.com/seedds/nxnative">nxnative</a>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-work%20in%20progress-e65100" alt="Work in progress">
+  <img src="https://img.shields.io/badge/build-V25-7ff5d2" alt="Build V25">
   <img src="https://img.shields.io/badge/iOS-27%2B-000000?logo=apple" alt="iOS 27 or later">
   <img src="https://img.shields.io/badge/graphics-Metal%204-1565c0" alt="Metal 4">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-c9a227" alt="MIT license"></a>
 </p>
 
 <p align="center">
-  <a href="#latest-v23">Latest</a> ·
+  <a href="#latest-v25">Latest</a> ·
   <a href="#where-it-stands">Where it stands</a> ·
-  <a href="#features">Features</a> ·
+  <a href="#the-road-so-far-v1-v25">The road so far</a> ·
   <a href="#requirements">Requirements</a> ·
   <a href="#build">Build</a> ·
   <a href="#install-and-play">Install and play</a> ·
-  <a href="#best-settings">Best settings</a> ·
+  <a href="#the-launcher">The launcher</a> ·
   <a href="#known-issues">Known issues</a> ·
   <a href="#credits">Credits</a>
 </p>
 
+Hi! This is my attempt to get PRAGMATA, Hugh and Diana's trip across the Moon, running on an iPhone as a real app. It isn't an emulator: the game's own code runs directly on the Apple chip, and its graphics are rebuilt on Apple's Metal 4. The name is the game in one line: a guy with a kid on his back.
+
 > [!NOTE]
-> **Not an emulator.** The game's own code runs directly on the Apple chip, with its graphics rebuilt on Metal. Nothing from the game is in this repository: you build the app yourself from your own copy of PRAGMATA. This project is not affiliated with the game's creators or with Nintendo.
+> **Nothing from the game is in this repository.** You build the app yourself from your own copy of PRAGMATA. This project is not affiliated with the game's creators or with Nintendo.
 
 > [!WARNING]
 > **Work in progress.** PRAGMATA runs on an iPhone 18 Pro through the opening and into play, but it is not stable for long sessions yet, and it does not run on 8 GB devices yet. See [Where it stands](#where-it-stands).
 
-## Latest: V23
+## Latest: V25
 
-- **New touch stick:** a plain translucent knob in a faint ring, drawn the way the [Ocarina of Time port](https://github.com/cheemu21/kid-with-sword-remake) draws its stick.
-- **Bigger D-pad:** about 30 % larger, with solid arrowheads and no circle around it, moved clear of the home bar and the ZL key.
-- Everything from V22: the fix for the black screen that could take the whole phone down, shader-code memory kept out of the GPU's memory, smaller clears and idle upload memory given back.
+- **A new launcher made for PRAGMATA:** the Earth rising over the Moon behind it, a board of six setting nodes, and PLAY as a diamond in the corner. See [The launcher](#the-launcher).
+- **Every memory saver is a switch now:** the Texture saver, freeing unused render targets and idle upload memory, and the size frame generation works at. Before V25 they could only be set in `env.txt`.
+- **The Performance HUD is a toggle again:** a line in `env.txt` used to lock it.
+- Everything from V24: the texture memory saver (large textures skip their finest detail levels, for far less GPU memory).
 
 ## Where it stands
 
-Measured on an **iPhone 18 Pro** (A20 Pro), iOS 27.2:
+Measured on my **iPhone 18 Pro** (A20 Pro), iOS 27.2:
 
 - **Title screen and menus:** 60 fps.
 - **Gameplay:** 30 fps with frame generation on, so 60 fps on screen; frame times steady at 33 ms.
-- **Longest runs:** 6–7 minutes of play with no GPU error (V20, V22), each ended by the player leaving the app.
-- **GPU memory in play:** 5.7–6.6 GB resident, inside the 18 Pro's 8 GB budget.
+- **Longest runs:** 6–7 minutes of play with no GPU error (V20, V22), each ended by me leaving the app.
+- **GPU memory in play:** 5.7–6.6 GB resident before the texture saver (V22), inside the 18 Pro's 8 GB budget.
 - **GPU time:** about 25 ms a frame in play plus 3.5 ms for frame generation, of a 33 ms budget.
 
-**8 GB devices** (iPhone 15 Pro class) are the next goal: their GPU budget is about 5.4 GB, so memory needs another 1.5 GB or so cut, and their GPU is slower.
+**Where I'm headed:** 8 GB devices (iPhone 15 Pro class). Their GPU budget is about 5.4 GB and their GPU is slower, so the plan is the lowest memory and the least work per frame the game will take. V24 and V25 are the first steps.
+
+## The road so far (V1–V25)
+
+| Build | What changed |
+|---|---|
+| V1 | The first build: the game boots on the iPhone |
+| V2 | A 30 / 60 fps option |
+| V3 | The game's log written on the device |
+| V4 | A sparse-texture memory fix and the "Orbit" touch controls, made around PRAGMATA's aiming and hacking |
+| V5 | Rebased on upstream nxnative, with PRAGMATA-styled controls |
+| V6 | Compute image ranges and dual-source blend shaders |
+| V7–V8 | One-pass texture clears; touch-control fixes (V7 crashed at Play, V8 fixed it) |
+| V9 | Single-level sparse textures tiled |
+| V10–V12 | Frame generation (the game draws 30, MetalFX makes the frame between), then paced by the present interval |
+| V13–V18 | The big memory pools: old copies released once the GPU is done, small tail buffers instead of whole-pool copies, the residency commit worker |
+| V19 | Shared render targets nobody used for a while released |
+| V20 | Fixed streamed models showing up invisible; a memory census in the log |
+| V21 | Fixed a freeze that could take the whole phone down (guest-file pages wired before the residency commit) |
+| V22 | Shader-code memory kept out of the GPU's memory; idle upload memory given back |
+| V23 | The Ocarina of Time port's touch stick and a 30 % bigger D-pad |
+| V24 | The texture memory saver |
+| V25 | The PRAGMATA launcher; the memory savers and the Performance HUD as launcher switches |
 
 ## Features
 
 **Memory** (the main blocker on iPhone)
 
+- **Texture saver:** large compressed textures are made without their finest detail levels, a little softer up close for much less GPU memory.
 - Large memory pools are wired only as far as the game reads them, and their old copies are released once the GPU is done with them.
 - A lookup of unknown length near the end of a growing pool takes a small buffer to the pool's end instead of a copy of the whole pool (the opening's crashes, V14–V17).
-- Shared render targets nothing has used for 60 seconds are released (up to 860 MB in play).
+- Shared render targets nothing has used for a while are released (20 seconds by default on the iPhone).
 - Shader-code pools stay out of the GPU's memory (the GPU never reads them).
-- Idle upload staging is given back (`DM_NVN_UPLOAD_IDLE_MS`).
+- Idle upload staging is given back after 3 seconds.
 - A memory census in the log every 1,800 frames: what holds the GPU's memory, by kind.
 
 **Stability**
@@ -66,7 +97,7 @@ Measured on an **iPhone 18 Pro** (A20 Pro), iOS 27.2:
 
 **Performance and presentation**
 
-- Frame generation: the game draws 30 frames a second and MetalFX's frame interpolator makes the one between each two (about 3.5 ms each).
+- Frame generation: the game draws 30 frames a second and MetalFX's frame interpolator makes the one between each two (about 3.5 ms each), at half size by default.
 - One-pass layered texture clears (a 3D texture was cleared in 128 passes every frame), reused sparse-texture gather buffers.
 
 **Touch controls ("Orbit")**
@@ -105,14 +136,20 @@ Later builds reuse the extracted game files and the compiled shaders, and take a
    DM_ALIAS_SIZE=0xC00000000
    ```
 
-3. Start PRAGMATA from the launcher.
+   Leave the launcher's settings out of `env.txt`: anything set there is locked in the launcher ("Set by an env file").
+3. Start PRAGMATA, pick your settings and press PLAY.
 
-## Best settings
+## The launcher
 
-- **Frame rate 30 with Frame generation on:** 60 fps on screen. Native 60 fps in play is out of reach on the GPU's budget.
-- **Handheld console mode:** the game renders its 3D at a lower resolution.
-- **Performance HUD** (launcher): frame rate, GPU time and memory over the game.
-- **Diagnostics** (`Documents/env.txt`): `DM_MEMSTAT=memstat.tsv` writes memory by region once a second; `DM_NVN_GPUPROF=every:1800` times every GPU pass in one frame a minute.
+<p align="center"><i>The Earth over the Moon behind it, PRAGMATA at the top left, the settings as a board of nodes, PLAY at the bottom right.</i></p>
+
+- **The board:** six nodes, tap one to change it: **Frame Rate**, **Frame Gen**, **Console** (Docked / Handheld), **Tex Saver**, **Perf HUD** and **Controls** (Orbit, Orbit + D-pad, or Tap in handheld mode). A lit node is on; the panel at the right says what the last one you tapped does.
+- **PLAY:** checks your cloud save first (when you use one) and asks if this iPhone's save and the cloud's both changed.
+- **ALL SETTINGS:** every setting as a card, with the touch layout, cloud saves, the memory available and Reset to tested defaults.
+
+**Best settings on an 18 Pro:** Frame rate 30 with Frame generation on (60 fps on screen; native 60 in play is out of reach on the GPU's budget), Handheld console mode (lower 3D resolution), Texture saver on.
+
+**Diagnostics** go in `Documents/env.txt`: `DM_MEMSTAT=memstat.tsv` writes memory by region once a second; `DM_NVN_GPUPROF=every:1800` times every GPU pass in one frame a minute.
 
 ## Known issues
 
@@ -125,7 +162,8 @@ Later builds reuse the extracted game files and the compiled shaders, and take a
 ## Credits
 
 - **[huzaifahshahid71-ops](https://github.com/huzaifahshahid71-ops)** — the [PRAGMATA iOS investigation](https://github.com/huzaifahshahid71-ops/pragmata-ios-investigation) this port started from: the pinned nxnative changes, diagnostic tools and investigation notes it was handed over as.
-- **[seedds/nxnative](https://github.com/seedds/nxnative)** and its contributors — the native runtime, the Metal 4 graphics and upstream's PRAGMATA support this is built on. Upstream fixes ported here include work by [stan69b](https://github.com/stan69b) (guest-file wiring, shader-code pools, render-target heap slack, from PRs #1971 and #2566), [oliverames](https://github.com/oliverames) and kencalx's [NX18](https://github.com/kencalx/NX18) (the residency commit worker, PR #2868), [eibrunocorrea](https://github.com/eibrunocorrea) (indirect-draw masks, PR #2945) and [aksmith-git](https://github.com/aksmith-git) (idle upload staging, PR #1491).
-- **[Kid with Sword Remake](https://github.com/cheemu21/kid-with-sword-remake)** (the Ocarina of Time port) — frame generation and the touch stick's design.
+- **[seedds/nxnative](https://github.com/seedds/nxnative)** and its contributors — the native runtime, the Metal 4 graphics and upstream's PRAGMATA support this is built on. Upstream fixes ported here include work by [stan69b](https://github.com/stan69b) (guest-file wiring, shader-code pools, render-target heap slack, from PRs #1971 and #2566), [oliverames](https://github.com/oliverames) and kencalx's [NX18](https://github.com/kencalx/NX18) (the residency commit worker, PR #2868), [eibrunocorrea](https://github.com/eibrunocorrea) (indirect-draw masks, PR #2945), [aksmith-git](https://github.com/aksmith-git) (idle upload staging, PR #1491) and the texture memory saver (PR #1418).
+- **[Kid with Sword Remake](https://github.com/cheemu21/kid-with-sword-remake)** (my Ocarina of Time port) — frame generation and the touch stick's design.
+- The crayon drawing at the top and the launcher's Earth-over-the-Moon picture are fan art.
 
 Upstream source and its modifications keep the upstream MIT notice in [LICENSE](LICENSE). nxnative's own documentation (other games, the Mac app, developer notes) is in [docs](docs) and [dm/games](dm/games/README.md).

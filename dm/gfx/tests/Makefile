@@ -226,6 +226,12 @@ check_t_capture: t_capture
 # On the GPU: two synthetic frames through the capture hooks, the second one captured, then replayed by nvn_replay (same digest, twice)
 t_large_mdi: t_large_mdi.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_large_mdi.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+t_texture_quality: t_texture_quality.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_texture_quality.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_texture_quality
+check_t_texture_quality: t_texture_quality
+	DM_NVN_TEX_MIP_SKIP=0 MTL_DEBUG_LAYER=1 ./t_texture_quality
+	@for levels in 1 2 3; do DM_NVN_TEX_MIP_SKIP=512 DM_NVN_TEX_MIP_LEVELS=$$levels MTL_DEBUG_LAYER=1 ./t_texture_quality || exit $$?; done
 t_code_pool: t_code_pool.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_code_pool.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 .PHONY: check_t_code_pool

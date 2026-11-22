@@ -15,7 +15,8 @@ settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 
 BOTW, WONDER = '01007EF00011E000', '010015100B514000'
-PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD',
+                   'DM_NVN_TEX_MIP_SKIP', 'DM_NVN_TEX_MIP_LEVELS', 'DM_NVN_RT_IDLE_S', 'DM_NVN_UPLOAD_IDLE_MS']   # the memory savers (nvn_mtl.m mip_skip, tu_pass, up_idle_period)
 
 
 def build(gid, api, platform=None):

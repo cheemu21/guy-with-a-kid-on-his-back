@@ -1064,6 +1064,14 @@ void dm_gamepad_touch_feedback(bool on) { [g_view setTouchFeedback:on]; }
 int dm_pad_layout(void) { return g_view ? [g_view padLayout] : 0; }
 bool dm_pad_layout_offered(int layout) { return layout == 0 || layout == 1 || (layout == 2 && dm_opmode() == 0); }
 void dm_pad_layout_set(int layout) { [g_view setPadLayout:layout]; }
+int dm_pad_layout_saved(void) {   // the layout the next start takes (the launcher's Controls node): the saved pick, else the profile's
+    NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key]; return saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
+}
+void dm_pad_layout_store(int layout) {   // the launcher's pick: laid out now, and saved as picked (Tap too while docked, as handheld mode may be chosen with it)
+    if (layout < 0 || layout > 2) return;
+    [g_view setPadLayout:layout]; [NSUserDefaults.standardUserDefaults setObject:@(layout) forKey:k_layout_key];
+}
+int dm_touch_style(void) { return DM_GAME_TOUCH_STYLE; }   // 1: Orbit (the launcher names the layouts after it)
 void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ for (GCController *c in GCController.controllers) dm_motion_rearm(c); }); }   // On become active: motion_apple.h
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
